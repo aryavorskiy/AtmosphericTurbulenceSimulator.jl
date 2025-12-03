@@ -15,125 +15,110 @@ function BandSpec(base_wavelength::Real; bandpass, tmax=1, tmin=1, npts=7)
     return BandSpec(base_wavelength, wavelengths, intensities)
 end
 function radial_blur!(out, src, bspec::BandSpec)
-    # TODO refactor vibe-coded function
     @assert size(out) == size(src)
     n1, n2 = size(src)
     ctr1, ctr2 = (n1 ÷ 2 + 1, n2 ÷ 2 + 1)
+    fill!(out, 0)
 
-    @inbounds for j in 1:n2
+    for j in 1:n2
         dy = j - ctr2
         for i in 1:n1
             dx = i - ctr1
-            acc = zero(eltype(out))
             for k in eachindex(bspec.wavelengths)
                 r = bspec.wavelengths[k] / bspec.base_wavelength
                 sx = ctr1 + dx * r
                 sy = ctr2 + dy * r
                 ix = floor(Int, sx)
                 iy = floor(Int, sy)
-                if 1 <= ix < n1 && 1 <= iy < n2
+                @views if 1 <= ix < n1 && 1 <= iy < n2
                     tx = sx - ix
                     ty = sy - iy
-                    v00 = src[ix,     iy    ]
-                    v10 = src[ix + 1, iy    ]
-                    v01 = src[ix,     iy + 1]
-                    v11 = src[ix + 1, iy + 1]
-                    val = (1 - tx) * (1 - ty) * v00 +
+                    v00 = src[ix,     iy    , :]
+                    v10 = src[ix + 1, iy    , :]
+                    v01 = src[ix,     iy + 1, :]
+                    v11 = src[ix + 1, iy + 1, :]
+                    @. out[i, j, :] += (1 - tx) * (1 - ty) * v00 +
                           tx       * (1 - ty) * v10 +
                           (1 - tx) * ty       * v01 +
                           tx       * ty       * v11
-                    acc += bspec.intensities[k] * val
                 end
             end
-            out[i, j] = acc
         end
     end
     return out
 end
 
-"""
-    ImagingPipeline
-
-A struct that represents an imaging pipeline of a telescope.
-"""
-struct ImagingPipeline{AT,MT,PT,ST<:Union{Nothing,BandSpec}}
+struct ImagingSpec{AT}
     aperture::AT
-    band_spec::ST
+    img_size::NTuple{2,Int}
+    band_spec::BandSpec
+end
+
+"""
+    ImagingSpec(aperture[, imsize, bspec]; nyqist_oversample=1)
+
+Creates an imaging pipeline spec object for a telescope with a given aperture function.
+
+# Arguments
+- `aperture`: the aperture function of the telescope (a 2D array).
+- `imsize`: the size of the output images (a tuple of two integers). If not provided,
+    it is computed as double the size of the aperture times the `nyqist_oversample` factor.
+"""
+ImagingSpec(aperture, bspec=BandSpec(1.0, [1.0]); nyqist_oversample=1) =
+    ImagingSpec(aperture, round.(Int, size(aperture) .* 2 .* nyqist_oversample), bspec)
+ImagingSpec(aperture, imsize::NTuple{2,Int}) =
+    ImagingSpec(aperture, imsize, BandSpec(1.0, [1.0]))
+
+struct ImagingBuffers{AT,MT,PT}
+    aperture::AT
+    band_spec::BandSpec
     aperture_buffer::MT
     focal_buffer::MT
     fftplan!::PT
 end
 
-"""
-    ImagingPipeline(aperture; nyqist_oversample=1)
-
-Creates an imaging pipeline for a telescope with a given aperture function.
-
-# Arguments
-- `aperture`: the aperture function of the telescope (a 2D array).
-- `nyqist_oversample`: the oversampling factor of the Nyquist frequency.
-    Basically, if the aperture is sampled at a frequency `f`, the Nyquist frequency is
-    `f / 2`. The aperture is then padded with zeros to reach a frequency of
-    `f / 2 * nyqist_oversample`.
-"""
-function ImagingPipeline(aperture, bspec=nothing; nyqist_oversample=1, batch=64)
-    buf1 = similar(aperture, ComplexF64, round.(Int, 2 .* nyqist_oversample .* size(aperture))..., batch)
-    buf2 = similar(buf1)
-    fill!(buf1, 0); fill!(buf2, 0)
-    return ImagingPipeline(aperture, bspec, buf1, buf2, plan_fft!(buf1, (1, 2)))
+function ImagingBuffers(imgspec::ImagingSpec, batch)
+    buf1 = zeros(ComplexF64, imgspec.img_size..., batch)
+    buf2 = zeros(ComplexF64, imgspec.img_size..., batch)
+    return ImagingBuffers(imgspec.aperture, imgspec.band_spec, buf1, buf2, plan_fft!(buf1, (1, 2)))
 end
-Base.size(pipeline::ImagingPipeline) = size(pipeline.aperture)
-imgsize(pipeline::ImagingPipeline) = size(pipeline.focal_buffer)[1:2]
-batch_length(pipeline::ImagingPipeline) = size(pipeline.aperture_buffer, 3)
 
 function write_phases!(aperture_buffer, phases, aperture)
     M, N = size(phases)
     Cx, Cy = size(aperture_buffer) .÷ 2
     fill!(aperture_buffer, 0)
     aperture_buffer[Cx - M ÷ 2 + 1:Cx - M ÷ 2 + M, Cy - N ÷ 2 + 1:Cy - N ÷ 2 + N, :] .=
-        aperture .* exp.(im .* phases)
+        aperture .* cis.(phases)
     return pipeline
 end
 
-"""
-    psf!(pipeline, phases)
-
-Create an image of a point source with a given phase pattern.
-"""
-function psf!(pipeline::ImagingPipeline, phases)
-    write_phases!(pipeline.aperture_buffer, phases, pipeline.aperture)
-    pipeline.fftplan! * pipeline.aperture_buffer
-    ifftshift!(pipeline.focal_buffer, pipeline.aperture_buffer, (1, 2))
-    if pipeline.band_spec !== nothing
-        pipeline.aperture_buffer .= abs2.(pipeline.focal_buffer)
-        radial_blur!(pipeline.focal_buffer, pipeline.aperture_buffer, pipeline.band_spec)
+function psf!(bufs::ImagingBuffers, phases)
+    write_phases!(bufs.aperture_buffer, phases, bufs.aperture)
+    bufs.fftplan! * bufs.aperture_buffer
+    ifftshift!(bufs.focal_buffer, bufs.aperture_buffer, (1, 2))
+    if length(bufs.band_spec.wavelengths) > 1
+        bufs.aperture_buffer .= abs2.(bufs.focal_buffer)
+        radial_blur!(bufs.focal_buffer, bufs.aperture_buffer, bufs.band_spec)
     else
-        pipeline.focal_buffer .= abs2.(pipeline.focal_buffer)
+        bufs.focal_buffer .= abs2.(bufs.focal_buffer)
     end
 end
 
-"""
-    psf(pipeline, phases)
-
-Compute the point spread function (PSF) with a given phase pattern.
-"""
-psf(pipeline::ImagingPipeline, phases) = real(psf!(pipeline, phases))
-
-function apply_image_fft!(pipeline::ImagingPipeline, true_img_fft; kw...)
+function apply_image_fft!(pipeline::ImagingBuffers, true_img_fft; kw...)
     pipeline.fftplan! \ pipeline.focal_buffer
     pipeline.focal_buffer .*= true_img_fft
     pipeline.fftplan! * pipeline.focal_buffer
     return pipeline.focal_buffer
 end
 
-function simulate_readout!(dst, img, readout_buf; photons=Inf, background=1)
+function simulate_readout!(dst, img; photons=Inf, background=1)
     if isfinite(photons)
         @assert maximum(abs ∘ imag, img) / maximum(abs ∘ real, img) < 1e-5
         @assert all(x -> real(x) ≥ 0, img)
         psf_norm = sum(real, img, dims=(1,2))
         @. dst = rand(Poisson(real(img) / psf_norm * photons + background))
     else
-        dst .= img
+        copyto!(dst, img)
     end
 end
 
@@ -154,25 +139,27 @@ function CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); aa_dis
     return aperture
 end
 
-_isfinite_photons(readout::NamedTuple) = get(readout, :photons, 0.0) isa Integer
-function simulate_images(imag_pipe, phase_sampler, true_sky=nothing; n, filename="images.h5",
-        verbose=true, readout=(photons=10_000, background=1), true_sky_fft=isnothing(true_sky) ? nothing : ifft(ifftshift(true_sky)))
+_isfinite_photons(readout::NamedTuple) = get(readout, :photons, Inf) isa Integer
+function simulate_images(img_spec::ImagingSpec, phase_sampler, true_sky=nothing; n::Int,
+        batch::Int=64, filename="images.h5", verbose=true, readout=(photons=10_000, background=1),
+        true_sky_fft=isnothing(true_sky) ? nothing : ifft(ifftshift(true_sky)))
+    img_buffers = ImagingBuffers(img_spec, batch)
+    img_size = img_spec.img_size
+    batch = min(batch, n)
     h5open(filename, "w") do fid
-        batch = min(batch_length(imag_pipe), n)
-        dataset = create_dataset(fid, "images", _isfinite_photons(readout) ? Int : Float64, (imgsize(imag_pipe)..., n), chunk=(imgsize(imag_pipe)..., batch))
+        dataset = create_dataset(fid, "images", _isfinite_photons(readout) ? Int : Float64, (img_size..., n), chunk=(img_size..., batch))
         p = Progress(n, "Simulating images", enabled=verbose, dt=1)
-        real_img = zeros(_isfinite_photons(readout) ? Int : Float64, imgsize(imag_pipe)..., batch)
+        real_img = zeros(_isfinite_photons(readout) ? Int : Float64, img_size..., batch)
         noise_buf = noise_buffer(phase_sampler, batch)
         phase_buf = samplephases(phase_sampler, batch)
-        readout_buf = similar(real_img, 1, 1, batch)
         for j in 1:cld(n, batch)
             samplephases!(phase_buf, phase_sampler, noise_buf)
-            img = psf!(imag_pipe, phase_buf)
+            img = psf!(img_buffers, phase_buf)
             if true_sky_fft !== nothing
-                img = apply_image_fft!(imag_pipe, true_sky_fft)
+                img = apply_image_fft!(img_buffers, true_sky_fft)
             end
-            simulate_readout!(real_img, img, readout_buf; readout...)
-            HDF5.write_chunk(dataset, j-1, real_img)
+            simulate_readout!(real_img, img; readout...)
+            HDF5.write_chunk(dataset, j - 1, real_img)
             next!(p, step=min(batch, n - (j - 1) * batch))
         end
         finish!(p)
