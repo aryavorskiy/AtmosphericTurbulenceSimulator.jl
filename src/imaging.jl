@@ -76,32 +76,21 @@ Creates an imaging pipeline for a telescope with a given aperture function.
     `f / 2`. The aperture is then padded with zeros to reach a frequency of
     `f / 2 * nyqist_oversample`.
 """
-function ImagingPipeline(aperture, bspec=nothing; nyqist_oversample=1)
-    buf1 = similar(aperture, ComplexF64, round.(Int, 2 .* nyqist_oversample .* size(aperture)))
+function ImagingPipeline(aperture, bspec=nothing; nyqist_oversample=1, batch=64)
+    buf1 = similar(aperture, ComplexF64, round.(Int, 2 .* nyqist_oversample .* size(aperture))..., batch)
     buf2 = similar(buf1)
     fill!(buf1, 0); fill!(buf2, 0)
     return ImagingPipeline(aperture, bspec, buf1, buf2, plan_fft!(buf1, (1, 2)))
 end
-
 Base.size(pipeline::ImagingPipeline) = size(pipeline.aperture)
-imgsize(pipeline::ImagingPipeline) = size(pipeline.focal_buffer)
-
-function img_forward!(dest, pipeline::ImagingPipeline)
-    pipeline.fftplan! \ pipeline.aperture_buffer
-    fftshift!(dest, pipeline.aperture_buffer)
-end
-img_forward!(pipeline::ImagingPipeline) = img_forward!(pipeline.focal_buffer, pipeline)
-function img_reverse!(dest, pipeline::ImagingPipeline)
-    ifftshift!(dest, pipeline.focal_buffer)
-    pipeline.fftplan! * dest
-end
-img_reverse!(pipeline::ImagingPipeline) = img_reverse!(pipeline.aperture_buffer, pipeline)
+imgsize(pipeline::ImagingPipeline) = size(pipeline.focal_buffer)[1:2]
+batch_length(pipeline::ImagingPipeline) = size(pipeline.aperture_buffer, 3)
 
 function write_phases!(aperture_buffer, phases, aperture)
     M, N = size(phases)
     Cx, Cy = size(aperture_buffer) .÷ 2
     fill!(aperture_buffer, 0)
-    aperture_buffer[Cx - M ÷ 2 + 1:Cx - M ÷ 2 + M, Cy - N ÷ 2 + 1:Cy - N ÷ 2 + N] .=
+    aperture_buffer[Cx - M ÷ 2 + 1:Cx - M ÷ 2 + M, Cy - N ÷ 2 + 1:Cy - N ÷ 2 + N, :] .=
         aperture .* exp.(im .* phases)
     return pipeline
 end
@@ -114,7 +103,7 @@ Create an image of a point source with a given phase pattern.
 function psf!(pipeline::ImagingPipeline, phases)
     write_phases!(pipeline.aperture_buffer, phases, pipeline.aperture)
     pipeline.fftplan! * pipeline.aperture_buffer
-    ifftshift!(pipeline.focal_buffer, pipeline.aperture_buffer)
+    ifftshift!(pipeline.focal_buffer, pipeline.aperture_buffer, (1, 2))
     if pipeline.band_spec !== nothing
         pipeline.aperture_buffer .= abs2.(pipeline.focal_buffer)
         radial_blur!(pipeline.focal_buffer, pipeline.aperture_buffer, pipeline.band_spec)
@@ -137,11 +126,11 @@ function apply_image_fft!(pipeline::ImagingPipeline, true_img_fft; kw...)
     return pipeline.focal_buffer
 end
 
-function simulate_readout!(dst, img; photons=Inf, background=1)
+function simulate_readout!(dst, img, readout_buf; photons=Inf, background=1)
     if isfinite(photons)
         @assert maximum(abs ∘ imag, img) / maximum(abs ∘ real, img) < 1e-5
         @assert all(x -> real(x) ≥ 0, img)
-        psf_norm = sum(real, img)
+        psf_norm = sum(real, img, dims=(1,2))
         @. dst = rand(Poisson(real(img) / psf_norm * photons + background))
     else
         dst .= img
@@ -169,34 +158,22 @@ _isfinite_photons(readout::NamedTuple) = get(readout, :photons, 0.0) isa Integer
 function simulate_images(imag_pipe, phase_sampler, true_sky=nothing; n, filename="images.h5",
         verbose=true, readout=(photons=10_000, background=1), true_sky_fft=isnothing(true_sky) ? nothing : ifft(ifftshift(true_sky)))
     h5open(filename, "w") do fid
-        dataset = create_dataset(fid, "images", _isfinite_photons(readout) ? Int : Float64, (imgsize(imag_pipe)..., n))
-        noise_buffer_ch = Channel{Vector{Float64}}(Threads.nthreads())
-        foreach(_ -> put!(noise_buffer_ch, noise_buffer(phase_sampler)), 1:Threads.nthreads())
-        phase_buffer_ch = Channel{Matrix{Float64}}(Threads.nthreads())
-        foreach(_ -> put!(phase_buffer_ch, samplephases(phase_sampler)), 1:Threads.nthreads())
-        phases_ch = Channel{Matrix{Float64}}(Threads.nthreads()) do ch
-            Threads.@threads for _ in 1:n
-                phase_buffer = take!(phase_buffer_ch)
-                orth_noise = take!(noise_buffer_ch)
-                randn!(orth_noise)
-                samplephases!(phase_buffer, phase_sampler, orth_noise)
-                put!(ch, phase_buffer)
-                put!(noise_buffer_ch, orth_noise)
-            end
-        end
-
-        p = Progress(n, "Simulating...", enabled=verbose, dt=5)
-        real_img = zeros(_isfinite_photons(readout) ? Int : Float64, imgsize(imag_pipe)...)
-        for j in 1:n
-            phase_buffer = take!(phases_ch)
-            img = psf!(imag_pipe, phase_buffer)
-            put!(phase_buffer_ch, phase_buffer)
+        batch = min(batch_length(imag_pipe), n)
+        dataset = create_dataset(fid, "images", _isfinite_photons(readout) ? Int : Float64, (imgsize(imag_pipe)..., n), chunk=(imgsize(imag_pipe)..., batch))
+        p = Progress(n, "Simulating images", enabled=verbose, dt=1)
+        real_img = zeros(_isfinite_photons(readout) ? Int : Float64, imgsize(imag_pipe)..., batch)
+        noise_buf = noise_buffer(phase_sampler, batch)
+        phase_buf = samplephases(phase_sampler, batch)
+        readout_buf = similar(real_img, 1, 1, batch)
+        for j in 1:cld(n, batch)
+            samplephases!(phase_buf, phase_sampler, noise_buf)
+            img = psf!(imag_pipe, phase_buf)
             if true_sky_fft !== nothing
                 img = apply_image_fft!(imag_pipe, true_sky_fft)
             end
-            simulate_readout!(real_img, img; readout...)
-            dataset[:, :, j] = real_img
-            next!(p)
+            simulate_readout!(real_img, img, readout_buf; readout...)
+            HDF5.write_chunk(dataset, j-1, real_img)
+            next!(p, step=min(batch, n - (j - 1) * batch))
         end
         finish!(p)
     end

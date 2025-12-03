@@ -59,8 +59,8 @@ function samplephases!(phases, sampler::CovariantNoise, noise_buffer)
     mul!(phases_rs, sampler.noise_transform, noise_buffer)
     return phases
 end
-samplephases!(phases, sampler) = samplephases!(phases, sampler, noise_buffer(sampler))
-samplephases(sampler) = samplephases!(zeros(plate_size(sampler)), sampler)
+samplephases(sampler, batch::Int...) =
+    samplephases!(zeros(plate_size(sampler)..., batch...), sampler, noise_buffer(sampler, batch...))
 
 function project_sampler(sampler::CovariantNoise, basis)
     @assert size(basis, 1) == size(sampler.noise_transform, 1)
