@@ -3,7 +3,7 @@ module AtmosphericTurbulenceSimulator
 include("atmosphere.jl")
 export kolmogorov_covmat, KolmogorovUncorrelated
 include("imaging.jl")
-export BandSpec, ImagingSpec, imgsize, psf, psf!, CircularAperture, simulate_images
+export FilterSpec, ImagingSpec, imgsize, psf, psf!, CircularAperture, simulate_images
 
 FFTW.set_num_threads(8)
 

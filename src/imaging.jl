@@ -1,20 +1,20 @@
 using LinearAlgebra, FFTW, Distributions, HDF5, ProgressMeter
 
-struct BandSpec
+struct FilterSpec
     base_wavelength::Float64
     wavelengths::Vector{Float64}
     intensities::Vector{Float64}
-    function BandSpec(base_wavelength, wavelengths, intensities=ones(length(wavelengths)))
+    function FilterSpec(base_wavelength, wavelengths, intensities=ones(length(wavelengths)))
         @assert length(wavelengths) == length(intensities)
         new(base_wavelength, wavelengths, intensities)
     end
 end
-function BandSpec(base_wavelength::Real; bandpass, tmax=1, tmin=1, npts=7)
+function FilterSpec(base_wavelength::Real; bandpass, tmax=1, tmin=1, npts=7)
     wavelengths = range(base_wavelength - bandpass / 2, base_wavelength + bandpass / 2, length=npts)
     intensities = range(-pi/2, pi/2, length=npts) .|> x -> cos(x) * (tmax - tmin) + tmin
-    return BandSpec(base_wavelength, wavelengths, intensities)
+    return FilterSpec(base_wavelength, wavelengths, intensities)
 end
-function radial_blur!(out, src, bspec::BandSpec)
+function radial_blur!(out, src, bspec::FilterSpec)
     @assert size(out) == size(src)
     n1, n2 = size(src)
     ctr1, ctr2 = (n1 ÷ 2 + 1, n2 ÷ 2 + 1)
@@ -51,7 +51,7 @@ end
 struct ImagingSpec{AT}
     aperture::AT
     img_size::NTuple{2,Int}
-    band_spec::BandSpec
+    band_spec::FilterSpec
 end
 
 """
@@ -64,14 +64,14 @@ Creates an imaging pipeline spec object for a telescope with a given aperture fu
 - `imsize`: the size of the output images (a tuple of two integers). If not provided,
     it is computed as double the size of the aperture times the `nyqist_oversample` factor.
 """
-ImagingSpec(aperture, bspec=BandSpec(1.0, [1.0]); nyqist_oversample=1) =
+ImagingSpec(aperture, bspec=FilterSpec(1.0, [1.0]); nyqist_oversample=1) =
     ImagingSpec(aperture, round.(Int, size(aperture) .* 2 .* nyqist_oversample), bspec)
 ImagingSpec(aperture, imsize::NTuple{2,Int}) =
-    ImagingSpec(aperture, imsize, BandSpec(1.0, [1.0]))
+    ImagingSpec(aperture, imsize, FilterSpec(1.0, [1.0]))
 
 struct ImagingBuffers{AT,MT,PT}
     aperture::AT
-    band_spec::BandSpec
+    band_spec::FilterSpec
     aperture_buffer::MT
     focal_buffer::MT
     fftplan!::PT
@@ -139,17 +139,16 @@ function CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); aa_dis
     return aperture
 end
 
-_isfinite_photons(readout::NamedTuple) = get(readout, :photons, Inf) isa Integer
-function simulate_images(img_spec::ImagingSpec, phase_sampler, true_sky=nothing; n::Int,
+function simulate_images(::Type{T}, img_spec::ImagingSpec, phase_sampler::PhaseSampler, true_sky=nothing; n::Int,
         batch::Int=64, filename="images.h5", verbose=true, readout=(photons=10_000, background=1),
-        true_sky_fft=isnothing(true_sky) ? nothing : ifft(ifftshift(true_sky)))
+        true_sky_fft=isnothing(true_sky) ? nothing : ifft(ifftshift(true_sky))) where T
     img_buffers = ImagingBuffers(img_spec, batch)
     img_size = img_spec.img_size
     batch = min(batch, n)
     h5open(filename, "w") do fid
-        dataset = create_dataset(fid, "images", _isfinite_photons(readout) ? Int : Float64, (img_size..., n), chunk=(img_size..., batch))
+        dataset = create_dataset(fid, "images", T, (img_size..., n), chunk=(img_size..., batch))
         p = Progress(n, "Simulating images", enabled=verbose, dt=1)
-        real_img = zeros(_isfinite_photons(readout) ? Int : Float64, img_size..., batch)
+        real_img = zeros(T, img_size..., batch)
         noise_buf = noise_buffer(phase_sampler, batch)
         phase_buf = samplephases(phase_sampler, batch)
         for j in 1:cld(n, batch)
@@ -165,3 +164,5 @@ function simulate_images(img_spec::ImagingSpec, phase_sampler, true_sky=nothing;
         finish!(p)
     end
 end
+simulate_images(img_spec::ImagingSpec, phase_sampler::PhaseSampler; readout=(photons=10_000, background=1), kwargs...) =
+    simulate_images(isfinite(readout.photons) ? Int : Float64, img_spec, phase_sampler; readout=readout, kwargs...)

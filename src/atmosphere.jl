@@ -1,5 +1,7 @@
 using LinearAlgebra, HDF5, Random
 
+abstract type PhaseSampler end
+
 """
     kolmogorov_covmat(W)
 
@@ -37,7 +39,7 @@ kolmogorov_covmat(W::AbstractMatrix) =
     kolmogorov_covmat(size(W), W)
 
 const EigenType = Union{Tuple{<:Any,<:Any}, Eigen}
-struct CovariantNoise{MT}
+struct CovariantNoise{MT} <: PhaseSampler
     shape::NTuple{2,Int}
     noise_transform::MT
 end
@@ -59,7 +61,7 @@ function samplephases!(phases, sampler::CovariantNoise, noise_buffer)
     mul!(phases_rs, sampler.noise_transform, noise_buffer)
     return phases
 end
-samplephases(sampler, batch::Int...) =
+samplephases(sampler::PhaseSampler, batch::Int...) =
     samplephases!(zeros(plate_size(sampler)..., batch...), sampler, noise_buffer(sampler, batch...))
 
 function project_sampler(sampler::CovariantNoise, basis)
@@ -68,17 +70,28 @@ function project_sampler(sampler::CovariantNoise, basis)
     return CovariantNoise(sampler.shape, basisq * basisq' * sampler.noise_transform)
 end
 
-struct KolmogorovUncorrelated{MT<:AbstractMatrix}
+struct KolmogorovUncorrelated{MT<:AbstractMatrix} <: PhaseSampler
     weights::MT
     sampler::CovariantNoise{MT}
     factor::Float64
 end
-KolmogorovUncorrelated(weights::AbstractMatrix, r₀::Real, pixel_scale::Real) =
+"""
+    KolmogorovUncorrelated(W, r₀)
+
+Create a phase sampler that generates uncorrelated Kolmogorov-distributed phase screens over an aperture defined by `W`.
+
+# Arguments
+- `W`: the aperture weights. Either a 2D array, or a `(x, y)` tuple representing the size
+    of the aperture (in this case the aperture function is assumed to be a square of this
+    size).
+- `r₀`: the Fried parameter (in the same units as the aperture size).
+"""
+KolmogorovUncorrelated(weights::AbstractMatrix, r₀::Real) =
     KolmogorovUncorrelated(weights,
         CovariantNoise(size(weights), eigen(kolmogorov_covmat(weights))),
-        (pixel_scale / r₀)^(5/6))
-KolmogorovUncorrelated(sz::NTuple{2,Int}, r₀::Real, pixel_scale::Real) =
-    KolmogorovUncorrelated(fill(1/prod(sz), sz...), r₀, pixel_scale)
+        (r₀)^(-5/6))
+KolmogorovUncorrelated(sz::NTuple{2,Int}, r₀::Real) =
+    KolmogorovUncorrelated(fill(1/prod(sz), sz...), r₀)
 noise_buffer(turb::KolmogorovUncorrelated, batch...) = noise_buffer(turb.sampler, batch...)
 plate_size(turb::KolmogorovUncorrelated) = plate_size(turb.sampler)
 function samplephases!(phases, turb::KolmogorovUncorrelated, noise_buffer)
