@@ -13,30 +13,22 @@ term is excluded in this model. This function assumes unit Fried parameter r0=1.
     of the aperture (in this case the aperture function is assumed to be a square of this
     size).
 """
-function kolmogorov_covmat(sz::NTuple{2}, constraint=nothing)
-    I = CartesianIndices(sz)
-    C = Array{Float64}(undef, length(I), length(I))
-
+function kolmogorov_covmat(W::AbstractMatrix)
+    I = eachindex(IndexCartesian(), W)
+    C = similar(W, length(I), length(I))
     for i in 1:length(I), j in 1:length(I)
         x = I[i][1] - I[j][1]
         y = I[i][2] - I[j][2]
         C[i, j] = -0.5 * 6.88 * (x^2 + y^2)^(5/6)
     end
-    if constraint === nothing
-        Cp = vec(sum(C, dims=2)) / prod(sz)
-        Cc = sum(Cp) / prod(sz)
-    elseif constraint isa AbstractMatrix
-        @assert size(constraint) == sz
-        @assert sum(constraint) ≈ 1
-        Cp = vec(sum(C .* vec(constraint)', dims=2))
-        Cc = sum(Cp .* vec(constraint))
-    else
-        error("Invalid constraint of type $(typeof(constraint))")
-    end
+    @assert sum(W) ≈ 1
+    Cp = vec(sum(C .* vec(W)', dims=2))
+    Cc = sum(Cp .* vec(W))
     return Symmetric(C .- Cp .- Cp' .+ Cc)
 end
-kolmogorov_covmat(W::AbstractMatrix) =
-    kolmogorov_covmat(size(W), W)
+kolmogorov_covmat(::Type{T}, sz::NTuple{2,Int}) where T =
+    kolmogorov_covmat(fill(convert(T, 1/prod(sz)), sz...))
+kolmogorov_covmat(sz::NTuple{2,Int}) = kolmogorov_covmat(Float64, sz)
 
 const EigenType = Union{Tuple{<:Any,<:Any}, Eigen}
 struct CovariantNoise{MT} <: PhaseSampler
@@ -45,6 +37,7 @@ struct CovariantNoise{MT} <: PhaseSampler
 end
 noise_buffer(sampler::CovariantNoise, batch::Int...) =
     similar(sampler.noise_transform, size(sampler.noise_transform, 2), batch...)
+noise_eltype(sampler::CovariantNoise) = eltype(sampler.noise_transform)
 plate_size(sampler::CovariantNoise) = sampler.shape
 function CovariantNoise(sz::NTuple{2,Int}, (E, U)::EigenType)
     @assert length(E) == prod(sz)
@@ -62,7 +55,7 @@ function samplephases!(phases, sampler::CovariantNoise, noise_buffer)
     return phases
 end
 samplephases(sampler::PhaseSampler, batch::Int...) =
-    samplephases!(zeros(plate_size(sampler)..., batch...), sampler, noise_buffer(sampler, batch...))
+    samplephases!(zeros(noise_eltype(sampler), plate_size(sampler)..., batch...), sampler, noise_buffer(sampler, batch...))
 
 function project_sampler(sampler::CovariantNoise, basis)
     @assert size(basis, 1) == size(sampler.noise_transform, 1)
@@ -70,10 +63,10 @@ function project_sampler(sampler::CovariantNoise, basis)
     return CovariantNoise(sampler.shape, basisq * basisq' * sampler.noise_transform)
 end
 
-struct KolmogorovUncorrelated{MT<:AbstractMatrix} <: PhaseSampler
+struct KolmogorovUncorrelated{T, MT<:AbstractMatrix{T}} <: PhaseSampler
     weights::MT
     sampler::CovariantNoise{MT}
-    factor::Float64
+    factor::T
 end
 """
     KolmogorovUncorrelated(W, r₀)
@@ -89,10 +82,13 @@ Create a phase sampler that generates uncorrelated Kolmogorov-distributed phase 
 KolmogorovUncorrelated(weights::AbstractMatrix, r₀::Real) =
     KolmogorovUncorrelated(weights,
         CovariantNoise(size(weights), eigen(kolmogorov_covmat(weights))),
-        (r₀)^(-5/6))
+        convert(eltype(weights), (r₀)^(-5/6)))
+KolmogorovUncorrelated(::Type{T}, sz::NTuple{2,Int}, r₀::Real) where T =
+    KolmogorovUncorrelated(fill(convert(T, 1/prod(sz)), sz...), r₀)
 KolmogorovUncorrelated(sz::NTuple{2,Int}, r₀::Real) =
-    KolmogorovUncorrelated(fill(1/prod(sz), sz...), r₀)
+    KolmogorovUncorrelated(Float64, sz, r₀)
 noise_buffer(turb::KolmogorovUncorrelated, batch...) = noise_buffer(turb.sampler, batch...)
+noise_eltype(turb::KolmogorovUncorrelated) = noise_eltype(turb.sampler)
 plate_size(turb::KolmogorovUncorrelated) = plate_size(turb.sampler)
 function samplephases!(phases, turb::KolmogorovUncorrelated, noise_buffer)
     samplephases!(phases, turb.sampler, noise_buffer)

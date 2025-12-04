@@ -1,57 +1,61 @@
 using LinearAlgebra, FFTW, Distributions, HDF5, ProgressMeter
 
-struct FilterSpec
-    base_wavelength::Float64
-    wavelengths::Vector{Float64}
-    intensities::Vector{Float64}
-    function FilterSpec(base_wavelength, wavelengths, intensities=ones(length(wavelengths)))
-        @assert length(wavelengths) == length(intensities)
-        new(base_wavelength, wavelengths, intensities)
-    end
+struct FilterSpec{T}
+    base_wavelength::T
+    wavelengths::Vector{T}
+    intensities::Vector{T}
 end
-function FilterSpec(base_wavelength::Real; bandpass, tmax=1, tmin=1, npts=7)
+function FilterSpec(::Type{T}, base_wavelength::Real; bandpass, tmax=1, tmin=1, npts=7) where T<:Real
     wavelengths = range(base_wavelength - bandpass / 2, base_wavelength + bandpass / 2, length=npts)
     intensities = range(-pi/2, pi/2, length=npts) .|> x -> cos(x) * (tmax - tmin) + tmin
-    return FilterSpec(base_wavelength, wavelengths, intensities)
+    return FilterSpec{T}(base_wavelength, wavelengths, intensities)
 end
+FilterSpec(base_wavelength::Real; kw...) = FilterSpec(Float64, base_wavelength; kw...)
+Base.convert(::Type{FilterSpec{T}}, bspec::FilterSpec) where T<:Real =
+    FilterSpec{T}(bspec.base_wavelength,
+        bspec.wavelengths, bspec.intensities)
+
 function radial_blur!(out, src, bspec::FilterSpec)
     @assert size(out) == size(src)
     n1, n2 = size(src)
     ctr1, ctr2 = (n1 ÷ 2 + 1, n2 ÷ 2 + 1)
-    fill!(out, 0)
 
-    for j in 1:n2
-        dy = j - ctr2
-        for i in 1:n1
-            dx = i - ctr1
-            for k in eachindex(bspec.wavelengths)
-                r = bspec.wavelengths[k] / bspec.base_wavelength
-                sx = ctr1 + dx * r
-                sy = ctr2 + dy * r
-                ix = floor(Int, sx)
-                iy = floor(Int, sy)
-                @views if 1 <= ix < n1 && 1 <= iy < n2
-                    tx = sx - ix
-                    ty = sy - iy
-                    v00 = src[ix,     iy    , :]
-                    v10 = src[ix + 1, iy    , :]
-                    v01 = src[ix,     iy + 1, :]
-                    v11 = src[ix + 1, iy + 1, :]
-                    @. out[i, j, :] += (1 - tx) * (1 - ty) * v00 +
-                          tx       * (1 - ty) * v10 +
-                          (1 - tx) * ty       * v01 +
-                          tx       * ty       * v11
+    Threads.@threads for p in axes(src, 3)
+        for j in 1:n2
+            dy = j - ctr2
+            for i in 1:n1
+                dx = i - ctr1
+                ze = zero(eltype(src))
+                for k in eachindex(bspec.wavelengths)
+                    r = bspec.wavelengths[k] / bspec.base_wavelength
+                    sx = ctr1 + dx * r
+                    sy = ctr2 + dy * r
+                    ix = floor(Int, sx)
+                    iy = floor(Int, sy)
+                    if 1 <= ix < n1 && 1 <= iy < n2
+                        tx = sx - ix
+                        ty = sy - iy
+                        v00 = src[ix,     iy    , p]
+                        v10 = src[ix + 1, iy    , p]
+                        v01 = src[ix,     iy + 1, p]
+                        v11 = src[ix + 1, iy + 1, p]
+                        ze += ((1 - tx) * (1 - ty) * v00 +
+                            tx       * (1 - ty) * v10 +
+                            (1 - tx) * ty       * v01 +
+                            tx       * ty       * v11) * bspec.intensities[k]
+                    end
                 end
+                out[i, j, p] = ze
             end
         end
     end
     return out
 end
 
-struct ImagingSpec{AT}
+struct ImagingSpec{T, AT<:AbstractMatrix{T}}
     aperture::AT
     img_size::NTuple{2,Int}
-    band_spec::FilterSpec
+    band_spec::FilterSpec{T}
 end
 
 """
@@ -64,23 +68,25 @@ Creates an imaging pipeline spec object for a telescope with a given aperture fu
 - `imsize`: the size of the output images (a tuple of two integers). If not provided,
     it is computed as double the size of the aperture times the `nyqist_oversample` factor.
 """
-ImagingSpec(aperture, bspec=FilterSpec(1.0, [1.0]); nyqist_oversample=1) =
-    ImagingSpec(aperture, round.(Int, size(aperture) .* 2 .* nyqist_oversample), bspec)
+ImagingSpec(aperture, bspec=FilterSpec(1, [1], [1]); nyqist_oversample=1) =
+    ImagingSpec(aperture, round.(Int, size(aperture) .* 2 .* nyqist_oversample),
+        convert(FilterSpec{eltype(aperture)}, bspec))
 ImagingSpec(aperture, imsize::NTuple{2,Int}) =
-    ImagingSpec(aperture, imsize, FilterSpec(1.0, [1.0]))
+    ImagingSpec(aperture, imsize, FilterSpec{eltype(aperture)}(1, [1], [1]))
 
-struct ImagingBuffers{AT,MT,PT}
+struct ImagingBuffers{T, AT, MT, PT}
     aperture::AT
-    band_spec::FilterSpec
+    band_spec::FilterSpec{T}
     aperture_buffer::MT
     focal_buffer::MT
-    fftplan!::PT
+    fftplan::PT
 end
 
 function ImagingBuffers(imgspec::ImagingSpec, batch)
-    buf1 = zeros(ComplexF64, imgspec.img_size..., batch)
-    buf2 = zeros(ComplexF64, imgspec.img_size..., batch)
-    return ImagingBuffers(imgspec.aperture, imgspec.band_spec, buf1, buf2, plan_fft!(buf1, (1, 2)))
+    complex_type = complex(eltype(imgspec.aperture))
+    buf1 = similar(imgspec.aperture, complex_type, imgspec.img_size..., batch)
+    buf2 = similar(imgspec.aperture, complex_type, imgspec.img_size..., batch)
+    return ImagingBuffers(imgspec.aperture, imgspec.band_spec, buf1, buf2, plan_fft(buf1, (1, 2)))
 end
 
 function write_phases!(aperture_buffer, phases, aperture)
@@ -93,8 +99,8 @@ function write_phases!(aperture_buffer, phases, aperture)
 end
 
 function psf!(bufs::ImagingBuffers, phases)
-    write_phases!(bufs.aperture_buffer, phases, bufs.aperture)
-    bufs.fftplan! * bufs.aperture_buffer
+    write_phases!(bufs.focal_buffer, phases, bufs.aperture)
+    mul!(bufs.aperture_buffer, bufs.fftplan, bufs.focal_buffer)
     ifftshift!(bufs.focal_buffer, bufs.aperture_buffer, (1, 2))
     if length(bufs.band_spec.wavelengths) > 1
         bufs.aperture_buffer .= abs2.(bufs.focal_buffer)
@@ -105,9 +111,9 @@ function psf!(bufs::ImagingBuffers, phases)
 end
 
 function apply_image_fft!(pipeline::ImagingBuffers, true_img_fft; kw...)
-    pipeline.fftplan! \ pipeline.focal_buffer
-    pipeline.focal_buffer .*= true_img_fft
-    pipeline.fftplan! * pipeline.focal_buffer
+    mul!(pipeline.aperture_buffer, pipeline.fftplan, pipeline.focal_buffer)
+    pipeline.aperture_buffer .*= true_img_fft
+    ldiv!(pipeline.focal_buffer, pipeline.fftplan, pipeline.aperture_buffer)
     return pipeline.focal_buffer
 end
 
@@ -115,15 +121,17 @@ function simulate_readout!(dst, img; photons=Inf, background=1)
     if isfinite(photons)
         @assert maximum(abs ∘ imag, img) / maximum(abs ∘ real, img) < 1e-5
         @assert all(x -> real(x) ≥ 0, img)
-        psf_norm = sum(real, img, dims=(1,2))
-        @. dst = rand(Poisson(real(img) / psf_norm * photons + background))
+        Threads.@threads for j in axes(img, 3)
+            psf_norm = sum(real, @view img[:, :, j])
+            @. dst[:, :, j] = rand(Poisson(real(@view img[:, :, j]) / psf_norm * photons + background))
+        end
     else
         copyto!(dst, img)
     end
 end
 
-function CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); aa_dist=1)
-    aperture = zeros(sz)
+function CircularAperture(::Type{T}, sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); aa_dist=1) where T<:Real
+    aperture = zeros(T, sz)
     X, Y = sz .÷ 2 .+ 1
     for I in eachindex(IndexCartesian(), aperture)
         x, y = I[1] - X, I[2] - Y
@@ -138,6 +146,8 @@ function CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); aa_dis
     end
     return aperture
 end
+CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); kw...) =
+    CircularAperture(Float64, sz, radius; kw...)
 
 function simulate_images(::Type{T}, img_spec::ImagingSpec, phase_sampler::PhaseSampler, true_sky=nothing; n::Int,
         batch::Int=64, filename="images.h5", verbose=true, readout=(photons=10_000, background=1),
