@@ -211,13 +211,13 @@ end
 CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); kw...) =
     CircularAperture(Float64, sz, radius; kw...)
 
-function simulate_images(::Type{T}, img_spec::ImagingSpec, phase_sampler::PhaseSampler,
+function simulate_images(::Type{T}, img_spec::ImagingSpec{T2}, phase_sampler::PhaseSampler,
         true_sky::TrueSky=PointSource(); n::Int, batch::Int=64, filename="images.h5", verbose=true,
-        save_phases=true) where T
+        save_phases=true) where {T,T2}
     if !isfinite_photons(true_sky) && T <: Integer
-        throw(ArgumentError("Integer image eltype for infinite-photon true sky models."))
+        throw(ArgumentError("Integer image eltype not compatible with infinite-photon true sky model."))
     end
-    true_sky_conv = convert(TrueSky{T}, true_sky)
+    true_sky_conv = convert(TrueSky{T2}, true_sky)
     batch = min(batch, n)
     img_buffers = ImagingBuffers(img_spec, batch)
     img_size = img_spec.img_size
