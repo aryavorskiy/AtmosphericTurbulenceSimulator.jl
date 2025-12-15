@@ -50,21 +50,39 @@ function prepare_spmat(::Type{T}, img_size, bspec::FilterSpec) where T<:Real
     return sparse(is, js, vs, nx * ny, nx * ny)
 end
 
-function radial_blur!(out, src, smat::SparseMatrixCSC)
-    @assert size(out) == size(src)
-    nx, ny, nb = size(src)
-    src_rs = reshape(src, nx * ny, nb)
-    out_rs = reshape(out, nx * ny, nb)
-    Threads.@threads for j in 1:nb
-        mul!(view(out_rs, :, j), smat, view(src_rs, :, j))
-    end
-    return out
+abstract type TrueSky{T} end
+
+@kwdef struct PointSource{T} <: TrueSky{T}
+    nphotons::T=Inf
+    background::T=1.0
 end
-function radial_blur!(out, src, smat::AbstractMatrix)
-    mul!(reshape(out, :, size(src, 3)), smat, reshape(src, :, size(src, 3)))
-    return out
+Base.convert(::Type{TrueSky{T}}, b::PointSource) where {T<:Real} =
+    PointSource{T}(b.nphotons, b.background)
+isfinite_photons(ts::PointSource) = isfinite(ts.nphotons)
+
+struct DoubleSystem{T} <: TrueSky{T}
+    rel_position::NTuple{2,Int}
+    intensity::T
+    brightness::PointSource{T}
+    DoubleSystem(position, intensity::Real, brightness::PointSource=PointSource()) =
+        new{typeof(intensity)}(Tuple(position), intensity, convert(TrueSky{typeof(intensity)}, brightness))
 end
-radial_blur!(out, src, ::Nothing) = copyto!(out, src)
+
+Base.convert(::Type{TrueSky{T}}, b::DoubleSystem) where {T<:Real} =
+    DoubleSystem(b.rel_position, T(b.intensity), convert(TrueSky{T}, b.brightness))
+isfinite_photons(ds::DoubleSystem) = isfinite_photons(ds.brightness)
+
+struct TrueSkyImage{T, MT<:AbstractMatrix{Complex{T}}} <: TrueSky{T}
+    true_sky_fft::MT
+    brightness::PointSource{T}
+end
+function TrueSkyImage(true_sky::AbstractMatrix{T}, brightness=PointSource()) where {T<:Real}
+    true_sky_fft = ifft(ifftshift(true_sky))
+    return new{T, typeof(true_sky_fft)}(true_sky_fft, convert(PointSource{T}, brightness))
+end
+Base.convert(::Type{TrueSky{T}}, b::TrueSkyImage) where {T<:Real} =
+    TrueSkyImage{T, typeof(b.true_sky_fft)}(convert.(Complex{T}, b.true_sky_fft), convert(PointSource{T}, b.brightness))
+isfinite_photons(ts::TrueSkyImage) = isfinite_photons(ts.brightness)
 
 struct ImagingSpec{T, AT<:AbstractMatrix{T}}
     aperture::AT
@@ -119,6 +137,22 @@ function write_phases!(aperture_buffer, phases, aperture)
     return pipeline
 end
 
+function radial_blur!(out, src, smat::SparseMatrixCSC)
+    @assert size(out) == size(src)
+    nx, ny, nb = size(src)
+    src_rs = reshape(src, nx * ny, nb)
+    out_rs = reshape(out, nx * ny, nb)
+    Threads.@threads for j in 1:nb
+        mul!(view(out_rs, :, j), smat, view(src_rs, :, j))
+    end
+    return out
+end
+function radial_blur!(out, src, smat::AbstractMatrix)
+    mul!(reshape(out, :, size(src, 3)), smat, reshape(src, :, size(src, 3)))
+    return out
+end
+radial_blur!(out, src, ::Nothing) = copyto!(out, src)
+
 function psf!(bufs::ImagingBuffers, phases)
     write_phases!(bufs.focal_buffer, phases, bufs.aperture)
     mul!(bufs.aperture_buffer, bufs.fftplan, bufs.focal_buffer)
@@ -127,20 +161,31 @@ function psf!(bufs::ImagingBuffers, phases)
     radial_blur!(bufs.focal_buffer, bufs.aperture_buffer, bufs.radial_blur)
 end
 
-function apply_image_fft!(pipeline::ImagingBuffers, true_img_fft; kw...)
-    mul!(pipeline.aperture_buffer, pipeline.fftplan, pipeline.focal_buffer)
-    pipeline.aperture_buffer .*= true_img_fft
-    ldiv!(pipeline.focal_buffer, pipeline.fftplan, pipeline.aperture_buffer)
-    return pipeline.focal_buffer
+function apply_image!(dst, ibufs::ImagingBuffers, ts::TrueSkyImage, psf_norm)
+    mul!(ibufs.aperture_buffer, ibufs.fftplan, ibufs.focal_buffer)
+    ibufs.aperture_buffer .*= ts.true_sky_fft
+    ldiv!(ibufs.focal_buffer, ibufs.fftplan, ibufs.aperture_buffer)
+    apply_image!(dst, ibufs, ts.brightness, psf_norm)
 end
-
-function simulate_readout!(dst, img; photons=Inf, background=1)
-    if isfinite(photons)
+function apply_image!(dst, ibufs::ImagingBuffers, ds::DoubleSystem, psf_norm)
+    img = ibufs.focal_buffer
+    @assert all(abs.(ds.rel_position) .< size(img)[1:2] .÷ 2)
+    @assert size(dst) == size(img)
+    o1, o2 = ds.rel_position
+    s1_dest, s1_src = o1 > 0 ? (o1 + 1:size(img, 1), 1:size(img, 1) - o1) : (1:size(img, 1) + o1, -o1 + 1:size(img, 1))
+    s2_dest, s2_src = o2 > 0 ? (o2 + 1:size(img, 2), 1:size(img, 2) - o2) : (1:size(img, 2) + o2, -o2 + 1:size(img, 2))
+    Threads.@threads for j in axes(img, 3)
+        @. img[s1_dest, s2_dest, j] += img[s1_src, s2_src, j] * ds.intensity
+    end
+    apply_image!(dst, ibufs, ds.brightness, psf_norm)
+end
+function apply_image!(dst, ibufs::ImagingBuffers, pt::PointSource, psf_norm)
+    img = ibufs.focal_buffer
+    if isfinite(pt.nphotons)
         @assert maximum(abs ∘ imag, img) / maximum(abs ∘ real, img) < 1e-5
         @assert all(x -> real(x) ≥ 0, img)
         Threads.@threads for j in axes(img, 3)
-            psf_norm = sum(real, @view img[:, :, j])
-            @. dst[:, :, j] = rand(Poisson(real(@view img[:, :, j]) / psf_norm * photons + background))
+            @. dst[:, :, j] = rand(Poisson(real(@view img[:, :, j]) / psf_norm * pt.nphotons + pt.background))
         end
     else
         copyto!(dst, img)
@@ -166,9 +211,13 @@ end
 CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); kw...) =
     CircularAperture(Float64, sz, radius; kw...)
 
-function simulate_images(::Type{T}, img_spec::ImagingSpec, phase_sampler::PhaseSampler, true_sky=nothing; n::Int,
-        batch::Int=64, filename="images.h5", verbose=true, save_phases=true, readout=(photons=10_000, background=1),
-        true_sky_fft=isnothing(true_sky) ? nothing : ifft(ifftshift(true_sky))) where T
+function simulate_images(::Type{T}, img_spec::ImagingSpec, phase_sampler::PhaseSampler,
+        true_sky::TrueSky=PointSource(); n::Int, batch::Int=64, filename="images.h5", verbose=true,
+        save_phases=true) where T
+    if !isfinite_photons(true_sky) && T <: Integer
+        throw(ArgumentError("Integer image eltype for infinite-photon true sky models."))
+    end
+    true_sky_conv = convert(TrueSky{T}, true_sky)
     batch = min(batch, n)
     img_buffers = ImagingBuffers(img_spec, batch)
     img_size = img_spec.img_size
@@ -183,13 +232,11 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec, phase_sampler::PhaseS
             fid["aperture"] = img_spec.aperture
             phs_dataset = create_dataset(fid, "phases", eltype(phase_buf), (phs_size..., n), chunk=(phs_size..., batch))
         end
+        psf_norm = sum(img_spec.aperture)^2
         for j in 1:cld(n, batch)
             samplephases!(phase_buf, phase_sampler, noise_buf)
-            img = psf!(img_buffers, phase_buf)
-            if true_sky_fft !== nothing
-                img = apply_image_fft!(img_buffers, true_sky_fft)
-            end
-            simulate_readout!(real_img, img; readout...)
+            psf!(img_buffers, phase_buf)
+            apply_image!(real_img, img_buffers, true_sky_conv, psf_norm)
             HDF5.write_chunk(img_dataset, j - 1, real_img)
             save_phases && HDF5.write_chunk(phs_dataset, j - 1, phase_buf)
             next!(p, step=min(batch, n - (j - 1) * batch))
@@ -197,5 +244,5 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec, phase_sampler::PhaseS
         finish!(p)
     end
 end
-simulate_images(img_spec::ImagingSpec, phase_sampler::PhaseSampler; readout=(photons=10_000, background=1), kwargs...) =
-    simulate_images(isfinite(readout.photons) ? Int : Float64, img_spec, phase_sampler; readout=readout, kwargs...)
+simulate_images(img_spec::ImagingSpec, phase_sampler::PhaseSampler, true_sky::TrueSky=PointSource(); kwargs...) =
+    simulate_images(isfinite_photons(true_sky) ? Int : Float64, img_spec, phase_sampler, true_sky; kwargs...)
