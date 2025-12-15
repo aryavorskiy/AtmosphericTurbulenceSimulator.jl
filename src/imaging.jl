@@ -197,9 +197,34 @@ end
 CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); kw...) =
     CircularAperture(Float64, sz, radius; kw...)
 
+function _prepare_imgbuffers(img_spec::ImagingSpec, batch::Int, ::Val{:serial})
+    return ImagingBuffers(img_spec, batch)
+end
+@inline function _kernel!(real_img, img_buf::ImagingBuffers, phase_buf, true_sky, psf_norm)
+    psf!(img_buf, phase_buf)
+    apply_image!(real_img, img_buf, true_sky, psf_norm)
+end
+function _prepare_imgbuffers(img_spec::ImagingSpec, ::Int, ::Val{:threaded})
+    imgbuf1 = ImagingBuffers(img_spec, 1)
+    img_buf_channel = Channel{typeof(imgbuf1)}(Threads.nthreads())
+    put!(img_buf_channel, imgbuf1)
+    Threads.@threads for _ in 1:Threads.nthreads()-1
+        img_buffs = ImagingBuffers(img_spec, 1)
+        put!(img_buf_channel, img_buffs)
+    end
+    return img_buf_channel
+end
+@inline function _kernel!(real_img, img_buf_channel::Channel, phase_buf, true_sky, psf_norm)
+    Threads.@threads for j in 1:size(real_img, 3)
+        img_buffs = take!(img_buf_channel)
+        psf!(img_buffs, view(phase_buf, :, :, j))
+        apply_image!(view(real_img, :, :, j), img_buffs, true_sky, psf_norm)
+        put!(img_buf_channel, img_buffs)
+    end
+end
 function simulate_images(::Type{T}, img_spec::ImagingSpec{T2}, phase_sampler::PhaseSampler,
         true_sky::TrueSky=PointSource(); n::Int, batch::Int=64, filename="images.h5", verbose=true,
-        save_phases=true) where {T,T2}
+        save_phases::Bool=true, serial::Bool=false) where {T,T2}
     if !isfinite_photons(true_sky) && T <: Integer
         throw(ArgumentError("Integer image eltype not compatible with infinite-photon true sky model."))
     end
@@ -219,22 +244,10 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec{T2}, phase_sampler::Ph
         end
         psf_norm = sum(img_spec.aperture)^2
 
-        img_buf1 = ImagingBuffers(img_spec, 1)
-        img_buf_channel = Channel{typeof(img_buf1)}(Threads.nthreads())
-        put!(img_buf_channel, img_buf1)
-        Threads.@threads for _ in 1:Threads.nthreads()-1
-            img_buffs = ImagingBuffers(img_spec, 1)
-            put!(img_buf_channel, img_buffs)
-        end
+        img_buf_channel = _prepare_imgbuffers(img_spec, batch, serial ? Val(:serial) : Val(:threaded))
         for j in 1:cld(n, batch)
             samplephases!(phase_buf, phase_sampler, noise_buf)
-            Threads.@threads for j in 1:batch
-                img_buffs = take!(img_buf_channel)
-                psf!(img_buffs, view(phase_buf, :, :, j))
-                apply_image!(view(real_img, :, :, j),
-                    img_buffs, true_sky_conv, psf_norm)
-                put!(img_buf_channel, img_buffs)
-            end
+            _kernel!(real_img, img_buf_channel, phase_buf, true_sky_conv, psf_norm)
             HDF5.write_chunk(img_dataset, j - 1, real_img)
             save_phases && HDF5.write_chunk(phs_dataset, j - 1, phase_buf)
             next!(p, step=min(batch, n - (j - 1) * batch))
