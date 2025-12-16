@@ -1,4 +1,4 @@
-using LinearAlgebra, HDF5, Random
+using LinearAlgebra, HDF5, Random, Adapt
 
 abstract type PhaseSampler end
 
@@ -45,6 +45,9 @@ function CovariantNoise(sz::NTuple{2,Int}, (E, U)::EigenType)
     E .= clamp.(E, 0, Inf)
     CovariantNoise(sz, U .* sqrt.(E'))
 end
+Adapt.adapt_structure(to, sampler::CovariantNoise) =
+    CovariantNoise(sampler.shape, Adapt.adapt_storage(to, sampler.noise_transform))
+
 screensize(sampler::CovariantNoise) = sampler.shape
 function samplephases!(phases, sampler::CovariantNoise, noise_buffer)
     @assert size(noise_buffer, 1) == size(sampler.noise_transform, 2)
@@ -54,8 +57,11 @@ function samplephases!(phases, sampler::CovariantNoise, noise_buffer)
     mul!(phases_rs, sampler.noise_transform, noise_buffer)
     return phases
 end
-samplephases(sampler::PhaseSampler, batch::Int...) =
-    samplephases!(zeros(noise_eltype(sampler), plate_size(sampler)..., batch...), sampler, noise_buffer(sampler, batch...))
+function samplephases(sampler::CovariantNoise, batch::Int...)
+    nbuf = noise_buffer(sampler, batch...)
+    phases = similar(nbuf, plate_size(sampler)..., batch...)
+    samplephases!(phases, sampler, nbuf)
+end
 
 function project_sampler(sampler::CovariantNoise, basis)
     @assert size(basis, 1) == size(sampler.noise_transform, 1)
@@ -87,10 +93,20 @@ KolmogorovUncorrelated(::Type{T}, sz::NTuple{2,Int}, r₀::Real) where T =
     KolmogorovUncorrelated(fill(convert(T, 1/prod(sz)), sz...), r₀)
 KolmogorovUncorrelated(sz::NTuple{2,Int}, r₀::Real) =
     KolmogorovUncorrelated(Float64, sz, r₀)
+Adapt.adapt_structure(to, turb::KolmogorovUncorrelated) =
+    KolmogorovUncorrelated(
+        Adapt.adapt_storage(to, turb.weights),
+        Adapt.adapt_structure(to, turb.sampler),
+        turb.factor)
+
 noise_buffer(turb::KolmogorovUncorrelated, batch...) = noise_buffer(turb.sampler, batch...)
 noise_eltype(turb::KolmogorovUncorrelated) = noise_eltype(turb.sampler)
 plate_size(turb::KolmogorovUncorrelated) = plate_size(turb.sampler)
 function samplephases!(phases, turb::KolmogorovUncorrelated, noise_buffer)
     samplephases!(phases, turb.sampler, noise_buffer)
+    @. phases *= turb.factor
+end
+function samplephases(turb::KolmogorovUncorrelated, batch...)
+    phases = samplephases(turb.sampler, batch...)
     @. phases *= turb.factor
 end
