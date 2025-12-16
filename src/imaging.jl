@@ -206,20 +206,20 @@ end
 end
 function _prepare_imgbuffers(img_spec::ImagingSpec, ::Int, ::Val{:threaded})
     imgbuf1 = ImagingBuffers(img_spec, 1)
-    img_buf_channel = Channel{typeof(imgbuf1)}(Threads.nthreads())
-    put!(img_buf_channel, imgbuf1)
-    Threads.@threads for _ in 1:Threads.nthreads()-1
-        img_buffs = ImagingBuffers(img_spec, 1)
-        put!(img_buf_channel, img_buffs)
+    img_buf_vector = Array{typeof(imgbuf1)}(undef, Threads.nthreads())
+    img_buf_vector[1] = imgbuf1
+    Threads.@threads for i in 2:Threads.nthreads()
+        img_buf_vector[i] = ImagingBuffers(img_spec, 1)
     end
-    return img_buf_channel
+    return img_buf_vector
 end
-@inline function _kernel!(real_img, img_buf_channel::Channel, phase_buf, true_sky, psf_norm)
-    Threads.@threads for j in 1:size(real_img, 3)
-        img_buffs = take!(img_buf_channel)
-        psf!(img_buffs, view(phase_buf, :, :, j))
-        apply_image!(view(real_img, :, :, j), img_buffs, true_sky, psf_norm)
-        put!(img_buf_channel, img_buffs)
+@inline function _kernel!(real_img, img_buf_vector::Vector, phase_buf, true_sky, psf_norm)
+    Threads.@threads for i in eachindex(img_buf_vector)
+        img_buffs = img_buf_vector[i]
+        for j in i:length(img_buf_vector):size(phase_buf, 3)
+            psf!(img_buffs, view(phase_buf, :, :, j))
+            apply_image!(view(real_img, :, :, j), img_buffs, true_sky, psf_norm)
+        end
     end
 end
 function simulate_images(::Type{T}, img_spec::ImagingSpec{T2}, phase_sampler::PhaseSampler,
