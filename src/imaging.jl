@@ -56,6 +56,8 @@ abstract type TrueSky{T} end
     nphotons::T=Inf
     background::T=1.0
 end
+PointSource(nphotons::T1, background::T2) where {T1<:Real,T2<:Real} =
+    return PointSource{promote_type(T1, T2)}(nphotons, background)
 Base.convert(::Type{TrueSky{T}}, b::PointSource) where {T<:Real} =
     PointSource{T}(b.nphotons, b.background)
 isfinite_photons(ts::PointSource) = isfinite(ts.nphotons)
@@ -173,7 +175,7 @@ function apply_image!(dst, ibufs::ImagingBuffers, ds::DoubleSystem, psf_norm)
     o1, o2 = ds.rel_position
     s1_dest, s1_src = o1 > 0 ? (o1 + 1:size(img, 1), 1:size(img, 1) - o1) : (1:size(img, 1) + o1, -o1 + 1:size(img, 1))
     s2_dest, s2_src = o2 > 0 ? (o2 + 1:size(img, 2), 1:size(img, 2) - o2) : (1:size(img, 2) + o2, -o2 + 1:size(img, 2))
-    @. img[s1_dest, s2_dest, :] += img[s1_src, s2_src, :] * ds.intensity
+    @views @. img[s1_dest, s2_dest, :] += img[s1_src, s2_src, :] * ds.intensity
     apply_image!(dst, ibufs, ds.brightness, psf_norm)
 end
 function apply_image!(dst, ibufs::ImagingBuffers, pt::PointSource, psf_norm)
@@ -206,12 +208,12 @@ end
 CircularAperture(sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); kw...) =
     CircularAperture(Float64, sz, radius; kw...)
 
-function prepare_imgbuffers(::Type{T}, img_spec::ImagingSpec, batch::Int, device_adapter) where T
+function prepare_imgbuffers(::Type{T}, img_spec::ImagingSpec, batch::Int, deviceadapter) where T
     return ImagingBuffers(
-        adapt(device_adapter, img_spec),
-        adapt(device_adapter, prepare_blur(img_spec)),
+        adapt(deviceadapter, img_spec),
+        adapt(deviceadapter, prepare_blur(img_spec)),
         batch),
-    adapt(device_adapter, zeros(T, img_spec.img_size..., batch))
+    adapt(deviceadapter, zeros(T, img_spec.img_size..., batch))
 end
 @inline function imagephases!(real_img, img_buf_tuple::Tuple, phase_buf, true_sky, psf_norm)
     img_buf, real_img_buf = img_buf_tuple
@@ -237,36 +239,36 @@ end
         end
     end
 end
-function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, phase_sampler::AtmosphereSpec{FT2},
-        true_sky::TrueSky=PointSource(); n::Int, batch::Int=64, filename="images.h5", verbose=true,
-        save_phases::Bool=true, device_adapter=Array) where {T,FT,FT2}
-    if !isfinite_photons(true_sky) && T <: Integer
+function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::AtmosphereSpec{FT2},
+        truesky::TrueSky=PointSource(); n::Int, batch::Int=512, filename="images.h5", verbose=true,
+        savephases::Bool=true, deviceadapter=Array) where {T,FT,FT2}
+    if !isfinite_photons(truesky) && T <: Integer
         throw(ArgumentError("Integer image eltype not compatible with infinite-photon true sky model."))
     end
-    true_sky_conv = convert(TrueSky{FT}, true_sky)
     batch = min(batch, n)
     img_size = img_spec.img_size
     real_img = zeros(T, img_size..., batch)
     psf_norm = sum(abs2, img_spec.aperture) * prod(img_size) *
         sum(img_spec.filter_spec.intensities .* img_spec.filter_spec.wavelengths .^ 2) /
         img_spec.filter_spec.base_wavelength ^ 2
-    phase_sampler_adapted = prepare_phasebuffers(phase_sampler, batch, device_adapter)
-    imgbuffers = prepare_imgbuffers(T, img_spec, batch, device_adapter)
+    truesky_adapt = adapt(deviceadapter, convert(TrueSky{FT}, truesky))
+    phasebuffers = prepare_phasebuffers(atm_spec, batch, deviceadapter)
+    imgbuffers = prepare_imgbuffers(T, img_spec, batch, deviceadapter)
 
     h5open(filename, "w") do fid
         img_dataset = create_dataset(fid, "images", T, (img_size..., n), chunk=(img_size..., batch))
         p = Progress(n, "Simulating images", enabled=verbose, dt=1)
-        if save_phases
-            phs_size = plate_size(phase_sampler_adapted)
+        if savephases
+            phs_size = plate_size(phasebuffers)
             fid["aperture"] = img_spec.aperture
             phs_dataset = create_dataset(fid, "phases", FT2, (phs_size..., n), chunk=(phs_size..., batch))
             phase_buf_h5 = zeros(FT2, phs_size..., batch)
         end
         for j in 1:cld(n, batch)
-            phases = samplephases!(phase_sampler_adapted)
-            imagephases!(real_img, imgbuffers, phases, true_sky_conv, psf_norm)
+            phases = samplephases!(phasebuffers)
+            imagephases!(real_img, imgbuffers, phases, truesky_adapt, psf_norm)
             HDF5.write_chunk(img_dataset, j - 1, real_img)
-            if save_phases
+            if savephases
                 if phases isa Array
                     HDF5.write_chunk(phs_dataset, j - 1, phases)
                 else

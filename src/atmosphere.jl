@@ -59,8 +59,8 @@ struct IndependentFrames{T} <: AtmosphereSpec{T}
 end
 IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0) where T = IndependentFrames{T}(sz, r0)
 
-function prepare_phasebuffers(spec::IndependentFrames{T}, batch::Int, device_adapter) where T
-    covar = Adapt.adapt_storage(device_adapter, kolmogorov_covmat(T, spec.size))
+function prepare_phasebuffers(spec::IndependentFrames{T}, batch::Int, deviceadapter) where T
+    covar = Adapt.adapt_storage(deviceadapter, kolmogorov_covmat(T, spec.size))
     covar .*= spec.r₀^(-5/3)
     E, U = eigen(covar)
     return KarhunenLoeveBuffers(spec.size, (E, U), batch)

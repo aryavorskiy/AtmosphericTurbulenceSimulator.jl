@@ -4,4 +4,4 @@ print("Benchmarking atmospheric turbulence simulation...\n")
 turb = IndependentFrames(Float32, (85, 85), 0.2 / (2/85))
 aperture = CircularAperture(Float32, (85, 85))
 pipeline = ImagingSpec(aperture, (256, 256), FilterSpec(1, bandpass=0.1))
-@time simulate_images(Int16, pipeline, turb, PointSource(1e4, 1.0), n=30000, batch=512)
+@time simulate_images(Int16, pipeline, turb, PointSource(1e4, 1.0), n=30000, savephases=false);
