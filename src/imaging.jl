@@ -1,13 +1,42 @@
 using LinearAlgebra, FFTW, Distributions, HDF5, ProgressMeter, SparseArrays, Adapt
 
+"""
+    FilterSpec
+
+Representation of a spectral filter used by the imaging pipeline.
+
+---
+    FilterSpec(base_wavelength, wavelengths[, intensities])
+
+# Arguments
+- `base_wavelength`: central wavelength for the filter.
+- `wavelengths`: vector of sampled wavelengths within the filter bandpass.
+- `intensities`: vector of relative intensities at each sampled wavelength. If not provided,
+  equal weights are assumed.
+"""
 struct FilterSpec{T}
     base_wavelength::T
     wavelengths::Vector{T}
     intensities::Vector{T}
 end
-function FilterSpec(::Type{T}, base_wavelength::Real; bandpass, tmax=1, tmin=1, npts=7) where T<:Real
+FilterSpec(base_wavelength::T1, wavelengths::AbstractVector{T2},
+    intensities::AbstractVector{T3}=ones(Int, length(wavelengths))) where {T1,T2,T3} =
+    FilterSpec{promote_type(T1, T2, T3)}(base_wavelength, wavelengths, intensities)
+
+"""
+    FilterSpec([T, ]base_wavelength; bandpass, tcenter=1, tedge=1, npts=7)
+
+# Arguments
+- `base_wavelength`: central wavelength for the filter (same units as `wavelengths`).
+
+# Keyword Arguments
+- `bandpass`: total width of the filter bandpass in wavelength units.
+- `tcenter`: relative intensity at the center wavelength (default 1).
+- `tedge`: relative intensity at the edges of the bandpass (default 1).
+"""
+function FilterSpec(::Type{T}, base_wavelength::Real; bandpass, tcenter=1, tedge=1, npts=7) where T<:Real
     wavelengths = range(base_wavelength - bandpass / 2, base_wavelength + bandpass / 2, length=npts)
-    intensities = range(-pi/2, pi/2, length=npts) .|> x -> cos(x) * (tmax - tmin) + tmin
+    intensities = range(-pi/2, pi/2, length=npts) .|> x -> cos(x) * (tcenter - tedge) + tedge
     return FilterSpec{T}(base_wavelength, wavelengths, intensities)
 end
 FilterSpec(base_wavelength::Real; kw...) = FilterSpec(Float64, base_wavelength; kw...)
@@ -52,6 +81,18 @@ end
 
 abstract type TrueSky{T} end
 
+"""
+    PointSource(nphotons[, background])
+    PointSource([;nphotons, background])
+
+Simple true-sky brightness model. When `nphotons` is finite the simulator will
+Poisson-sample pixel values according to the PSF-normalized flux with added background; if `nphotons` is
+`Inf` the continuous flux is used (no shot noise), and background is ignored.
+
+# Arguments
+- `nphotons`: total photons for the source (or `Inf` for continuous mode).
+- `background`: constant background added to the flux in photons per pixel.
+"""
 @kwdef struct PointSource{T} <: TrueSky{T}
     nphotons::T=Inf
     background::T=1.0
@@ -62,18 +103,41 @@ Base.convert(::Type{TrueSky{T}}, b::PointSource) where {T<:Real} =
     PointSource{T}(b.nphotons, b.background)
 isfinite_photons(ts::PointSource) = isfinite(ts.nphotons)
 
+"""
+    DoubleSystem(rel_position, intensity[; nphotons, background])
+
+Model for a two-component source (binary): primary plus a secondary offset by `rel_position`.
+`nphotons` and `background` describe the brightness of the primary component; the default is
+continuous flux, see [`PointSource`](@ref) for more info.
+
+# Arguments
+- `rel_position`: `(dx, dy)` integer tuple specifying the secondary's pixel offset.
+- `intensity`: multiplicative intensity of the secondary relative to the primary.
+"""
 struct DoubleSystem{T} <: TrueSky{T}
     rel_position::NTuple{2,Int}
     intensity::T
     brightness::PointSource{T}
-    DoubleSystem(position, intensity::Real, brightness::PointSource=PointSource()) =
+    DoubleSystem(position, intensity::Real, brightness::PointSource) =
         new{typeof(intensity)}(Tuple(position), intensity, convert(TrueSky{typeof(intensity)}, brightness))
 end
+DoubleSystem(position, intensity::Real; kw...) =
+    DoubleSystem(position, intensity, PointSource(; kw...))
 
 Base.convert(::Type{TrueSky{T}}, b::DoubleSystem) where {T<:Real} =
     DoubleSystem(b.rel_position, T(b.intensity), convert(TrueSky{T}, b.brightness))
 isfinite_photons(ds::DoubleSystem) = isfinite_photons(ds.brightness)
 
+"""
+    TrueSkyImage(true_sky::AbstractMatrix{T}[; nphotons, background])
+
+Wrap a real-valued true-sky image for use with the imaging pipeline. `nphotons` and
+`background` describe the brightness of the source; the default is continuous flux, see
+[`PointSource`](@ref) for more info.
+
+# Arguments
+- `true_sky`: real image array representing spatial sky brightness.
+"""
 struct TrueSkyImage{T, MT<:AbstractMatrix{Complex{T}}} <: TrueSky{T}
     true_sky_fft::MT
     brightness::PointSource{T}
@@ -82,12 +146,30 @@ function TrueSkyImage(true_sky::AbstractMatrix{T}, brightness=PointSource()) whe
     true_sky_fft = ifft(ifftshift(true_sky))
     return new{T, typeof(true_sky_fft)}(true_sky_fft, convert(PointSource{T}, brightness))
 end
+TrueSkyImage(mat::AbstractMatrix; kw...) =
+    TrueSkyImage(mat, PointSource(; kw...))
 Base.convert(::Type{TrueSky{T}}, b::TrueSkyImage) where {T<:Real} =
     TrueSkyImage{T, typeof(b.true_sky_fft)}(convert.(Complex{T}, b.true_sky_fft), convert(PointSource{T}, b.brightness))
 Adapt.adapt_structure(to, ts::TrueSkyImage) =
     TrueSkyImage(Adapt.adapt_storage(to, ts.true_sky_fft), ts.brightness)
 isfinite_photons(ts::TrueSkyImage) = isfinite_photons(ts.brightness)
 
+"""
+    ImagingSpec
+
+Container describing the imaging system configuration. It is defined by the aperture function,
+the specification of the filter and the output image size. If the image size does not match the
+aperture size, the aperture is zero-padded accordingly.
+
+---
+    ImagingSpec(aperture, [img_size, filter_spec; nyquist_oversample=1])
+
+# Arguments
+- `aperture`: 2D aperture (pupil) array describing the telescope pupil.
+- `img_size`: output image size `(nx, ny)`. If not provided, it is computed as double the
+  size of the aperture times the `nyquist_oversample` factor.
+- `filter_spec`: `FilterSpec` instance describing spectral sampling and relative intensities.
+"""
 struct ImagingSpec{T, AT<:AbstractMatrix{T}}
     aperture::AT
     img_size::NTuple{2,Int}
@@ -95,24 +177,13 @@ struct ImagingSpec{T, AT<:AbstractMatrix{T}}
 end
 ImagingSpec(aperture::AbstractMatrix{T}, imsize::NTuple{2,Int}, bspec::FilterSpec) where T<:Real =
     ImagingSpec{T, typeof(aperture)}(aperture, imsize, convert(FilterSpec{T}, bspec))
-Adapt.adapt_structure(to, imgspec::ImagingSpec) =
-    ImagingSpec(Adapt.adapt_storage(to, imgspec.aperture), imgspec.img_size, imgspec.filter_spec)
-
-"""
-    ImagingSpec(aperture[, imsize, bspec]; nyqist_oversample=1)
-
-Creates an imaging pipeline spec object for a telescope with a given aperture function.
-
-# Arguments
-- `aperture`: the aperture function of the telescope (a 2D array).
-- `imsize`: the size of the output images (a tuple of two integers). If not provided,
-    it is computed as double the size of the aperture times the `nyqist_oversample` factor.
-"""
-ImagingSpec(aperture, bspec=FilterSpec(1, [1], [1]); nyqist_oversample=1) =
-    ImagingSpec(aperture, round.(Int, size(aperture) .* 2 .* nyqist_oversample),
-        convert(FilterSpec{eltype(aperture)}, bspec))
 ImagingSpec(aperture, imsize::NTuple{2,Int}) =
     ImagingSpec(aperture, imsize, FilterSpec{eltype(aperture)}(1, [1], [1]))
+ImagingSpec(aperture, filter_spec=FilterSpec(1, [1], [1]); nyquist_oversample=1) =
+    ImagingSpec(aperture, round.(Int, size(aperture) .* 2 .* nyquist_oversample),
+        convert(FilterSpec{eltype(aperture)}, filter_spec))
+Adapt.adapt_structure(to, imgspec::ImagingSpec) =
+    ImagingSpec(Adapt.adapt_storage(to, imgspec.aperture), imgspec.img_size, imgspec.filter_spec)
 
 struct ImagingBuffers{AT, BT, MT, PT}
     aperture::AT
@@ -189,6 +260,18 @@ function apply_image!(dst, ibufs::ImagingBuffers, pt::PointSource, psf_norm)
     end
 end
 
+"""
+    CircularAperture([T, ]sz, radius[; aa_dist=1])
+
+Create a circular (optionally anti-aliased) aperture array of shape `sz`. Returns a 2D
+numeric array suitable for use as an aperture in `ImagingSpec`.
+
+# Arguments
+- `T`: desired numeric element type, `Float64` by default.
+- `sz`: aperture size `(nx, ny)`.
+- `radius`: radius of the circular aperture in pixels. Defaults to the largest that fits.
+- `aa_dist`: anti-aliasing transition width in pixels at the aperture edge.
+"""
 function CircularAperture(::Type{T}, sz::NTuple{2}, radius=minimum((sz .- 1) .÷ 2); aa_dist=1) where T<:Real
     aperture = zeros(T, sz)
     X, Y = sz .÷ 2 .+ 1
@@ -239,9 +322,34 @@ end
         end
     end
 end
+
+"""
+    simulate_images([T, ]img_spec::ImagingSpec, atm_spec::AtmosphereSpec[, truesky::TrueSky];
+        n, [batch, filename, verbose, savephases, deviceadapter])
+
+Simulate `n` images using the provided imaging and atmosphere specifications and write
+the results to an HDF5 file.
+
+# Arguments
+- `T`: output image element type; if not provided, defaults to `Int` for
+  finite-photon true sky models and `Float64` for infinite-photon models.
+- `img_spec`: an `ImagingSpec` describing the aperture, image size and filter.
+- `atm_spec`: an `AtmosphereSpec` used to produce phase screens.
+- `truesky`: a `TrueSky` model (e.g. `PointSource`, `DoubleSystem`, `TrueSkyImage`).
+
+# Keyword Arguments
+- `n`: number of images to simulate.
+- `batch`: batch size for buffered HDF5 writes (default 512).
+- `filename`: output HDF5 filename (default "images.h5").
+- `verbose`: show progress meter (true by default).
+- `savephases`: when true, the sampled phase screens are saved in the HDF5 in dataset with
+  key `"phases"`, and the pupil function is saved under key `"aperture"` (true by default).
+- `deviceadapter`: adapter for device-backed arrays (defaults to `Array`). To use GPU arrays,
+  pass e.g. `CUDA.CuArray` here (requires CUDA.jl).
+"""
 function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::AtmosphereSpec{FT2},
-        truesky::TrueSky=PointSource(); n::Int, batch::Int=512, filename="images.h5", verbose=true,
-        savephases::Bool=true, deviceadapter=Array) where {T,FT,FT2}
+    truesky::TrueSky=PointSource(); n::Int, batch::Int=512, filename="images.h5", verbose=true,
+    savephases::Bool=true, deviceadapter=Array) where {T,FT,FT2}
     if !isfinite_photons(truesky) && T <: Integer
         throw(ArgumentError("Integer image eltype not compatible with infinite-photon true sky model."))
     end

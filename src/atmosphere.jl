@@ -53,6 +53,19 @@ function samplephases!(sampler::KarhunenLoeveBuffers)
     return reshape(sampler.out_buffer, (sampler.shape..., size(sampler.out_buffer, 2)))
 end
 
+"""
+    IndependentFrames(size, r0)
+
+An `AtmosphereSpec` that produces independent (uncorrelated) phase frames for each timestep.
+
+# Arguments
+- `size`: a tuple `(nx, ny)` specifying the phase screen shape in pixels.
+- `r0`: Fried parameter (r₀) in pixels.
+
+# Notes
+This sampler is intentionally simple: frames are independent between timesteps and are
+generated using a Karhunen–Loève transform built from the Kolmogorov covariance.
+"""
 struct IndependentFrames{T} <: AtmosphereSpec{T}
     size::NTuple{2, Int}
     r₀::T
