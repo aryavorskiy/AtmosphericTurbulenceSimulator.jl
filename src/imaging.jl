@@ -331,7 +331,7 @@ Simulate `n` images using the provided imaging and atmosphere specifications and
 the results to an HDF5 file.
 
 # Arguments
-- `T`: output image element type; if not provided, defaults to `Int` for
+- `T`: output image numeric type; if not provided, defaults to `Int` for
   finite-photon true sky models and `Float64` for infinite-photon models.
 - `img_spec`: an `ImagingSpec` describing the aperture, image size and filter.
 - `atm_spec`: an `AtmosphereSpec` used to produce phase screens.
@@ -339,8 +339,8 @@ the results to an HDF5 file.
 
 # Keyword Arguments
 - `n`: number of images to simulate.
-- `batch`: batch size for buffered HDF5 writes (default 512).
-- `filename`: output HDF5 filename (default "images.h5").
+- `batch`: batch size for buffered computations and HDF5 writes (default 512).
+- `filename`: output HDF5 filename (default "simulation.h5").
 - `verbose`: show progress meter (true by default).
 - `savephases`: when true, the sampled phase screens are saved in the HDF5 in dataset with
   key `"phases"`, and the pupil function is saved under key `"aperture"` (true by default).
@@ -348,7 +348,7 @@ the results to an HDF5 file.
   pass e.g. `CUDA.CuArray` here (requires CUDA.jl).
 """
 function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::AtmosphereSpec{FT2},
-    truesky::TrueSky=PointSource(); n::Int, batch::Int=512, filename="images.h5", verbose=true,
+    truesky::TrueSky=PointSource(); n::Int, batch::Int=512, filename="simulation.h5", verbose=true,
     savephases::Bool=true, deviceadapter=Array) where {T,FT,FT2}
     if !isfinite_photons(truesky) && T <: Integer
         throw(ArgumentError("Integer image eltype not compatible with infinite-photon true sky model."))
@@ -391,3 +391,44 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::Atmosph
 end
 simulate_images(img_spec::ImagingSpec, phase_sampler::AtmosphereSpec, true_sky::TrueSky=PointSource(); kwargs...) =
     simulate_images(isfinite_photons(true_sky) ? Int : Float64, img_spec, phase_sampler, true_sky; kwargs...)
+
+"""
+    simulate_phases(phase_sampler::AtmosphereSpec; n, [batch, filename, verbose, deviceadapter])
+
+Simulate `n` phase screens using the provided atmosphere specification and write
+the results to an HDF5 file.
+
+# Arguments
+- `atm_spec`: an `AtmosphereSpec` used to produce phase screens.
+
+# Keyword Arguments
+- `n`: number of phase screens to simulate.
+- `batch`: batch size for buffered computations and HDF5 writes (default 512).
+- `filename`: output HDF5 filename (default "simulation.h5").
+- `verbose`: show progress meter (true by default).
+- `deviceadapter`: adapter for device-backed arrays (defaults to `Array`). To use GPU arrays,
+  pass e.g. `CUDA.CuArray` here (requires CUDA.jl).
+"""
+function simulate_phases(atm_spec::AtmosphereSpec{FT}; n::Int, batch::Int=512, filename="simulation.h5",
+        verbose=true, deviceadapter=Array) where {FT}
+    batch = min(batch, n)
+    phasebuffers = prepare_phasebuffers(atm_spec, batch, deviceadapter)
+
+    h5open(filename, "w") do fid
+        phs_size = plate_size(phasebuffers)
+        phs_dataset = create_dataset(fid, "phases", FT, (phs_size..., n), chunk=(phs_size..., batch))
+        p = Progress(n, "Simulating phases", enabled=verbose, dt=1)
+        phase_buf_h5 = zeros(FT, phs_size..., batch)
+        for j in 1:cld(n, batch)
+            phases = samplephases!(phasebuffers)
+            if phases isa Array
+                HDF5.write_chunk(phs_dataset, j - 1, phases)
+            else
+                copyto!(phase_buf_h5, phases)
+                HDF5.write_chunk(phs_dataset, j - 1, phase_buf_h5)
+            end
+            next!(p, step=min(batch, n - (j - 1) * batch))
+        end
+        finish!(p)
+    end
+end

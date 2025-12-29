@@ -18,7 +18,7 @@ Pkg.add(path="https://github.com/aryavorskiy/AtmosphericTurbulenceSimulator")
 
 This minimal example creates a simple circular aperture, an independent-frame atmosphere
 sampler, and simulates a small stack of images of a point source. The generated images are
-written to `images.h5` in the current directory.
+written to `simulation.h5` in the current directory.
 
 ```julia
 using AtmosphericTurbulenceSimulator
@@ -29,23 +29,28 @@ img_spec = ImagingSpec(ap, nyquist_oversample=1)
 
 # Atmosphere: independent phase patterns with r0 = 0.2 m
 # Assuming Kolmogorov turbulence, a 2 m telescope aperture and 64-pixel images
-atm = IndependentFrames((64, 64), 0.2 / 2 * 64)
+atm = IndependentFrames((64, 64), 0.2 / 2 * 50)
 
 # True sky: point source (1e7 photons per PSF, 200 photon per pixel background)
 ts = PointSource(1e7, 200)
 
-# Simulate 3000 images, write to images.h5, save phases as well
-simulate_images(img_spec, atm, ts; n=3000, filename="images.h5")
+# Simulate 3000 images, write to simulation.h5, save phases as well
+simulate_images(img_spec, atm, ts; n=3000, filename="simulation.h5")
 ```
+
+
+!!! Note
+    If yoyu need to generate only turbulent phase screens without simulating images, you can use
+    `simulate_phases(atm; n=3000)` instead.
 
 Let's take a look at what we just created:
 
 ```julia
 using HDF5, CairoMakie, Statistics
 
-img_dataset = h5read("images.h5", "images")
+img_dataset = h5read("simulation.h5", "images")
 first_image = img_dataset[:, :, 1]
-first_phase = h5read("images.h5", "phases", (:, :, 1))
+first_phase = h5read("simulation.h5", "phases", (:, :, 1))
 mean_image = dropdims(mean(img_dataset, dims=3), dims=3)
 
 fig = Figure(size=(900, 300))
@@ -62,7 +67,7 @@ fig
 
 ## Notes
 
-This toolchain utilizes Julia's multi-threading capabilities; add more threads by starting Julia with `-t N`, where `N` is the number of threads.
+This toolchain utilizes Julia's multi-threading capabilities; add more threads by launching Julia with `julia --threads=N`, where `N` is the number of threads you want. You can set `N=auto` to use all available CPU threads.
 
 To enable CUDA (or other GPU backends), import the respective packages (e.g., `CUDA.jl`) and add `deviceadapter=CuArray` (or other device array type) to the `simulate_images` function call. As of version 0.1, only [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) is tested for compatibility, feel free to open an issue if you encounter problems with other backends.
 
