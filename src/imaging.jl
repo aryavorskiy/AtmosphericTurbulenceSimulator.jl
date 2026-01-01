@@ -380,7 +380,7 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::Atmosph
                 if phases isa Array
                     HDF5.write_chunk(phs_dataset, j - 1, phases)
                 else
-                    copyto!(phase_buf_h5, phases)
+                    copy!(phase_buf_h5, phases)
                     HDF5.write_chunk(phs_dataset, j - 1, phase_buf_h5)
                 end
             end
@@ -424,7 +424,7 @@ function simulate_phases(atm_spec::AtmosphereSpec{FT}; n::Int, batch::Int=512, f
             if phases isa Array
                 HDF5.write_chunk(phs_dataset, j - 1, phases)
             else
-                copyto!(phase_buf_h5, phases)
+                copy!(phase_buf_h5, phases)
                 HDF5.write_chunk(phs_dataset, j - 1, phase_buf_h5)
             end
             next!(p, step=min(batch, n - (j - 1) * batch))
