@@ -92,7 +92,7 @@ IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0; interpolate_steps=0) where T
         return HardingInterpolator(sampler, r_0, target_size)
     else
         return interpolate_sampler(
-            HardingInterpolator(sampler, r_0), r_0 * 2, target_size, # HACK why r_0 / 2 ???
+            HardingInterpolator(sampler, r_0), r_0 * 2, target_size,
         )
     end
 end
@@ -128,7 +128,7 @@ function HardingInterpolator(base, r0::Number, crop_size::NTuple{2,Int}=plate_si
     @assert all(crop_size .≤ (2 .* low_size .- 1)) "crop_size must be less than or equal to (2*low_size - 1)."
     padded_size = 2 .* low_size .+ 5
     out = zeros(noise_eltype(base), padded_size..., batch_length(base))
-    return HardingInterpolator(base, out, sqrt(0.0844 / r0^(5/3)), crop_size)
+    return HardingInterpolator(base, out, sqrt(0.5265 / r0^(5/3)), crop_size)
 end
 plate_size(sampler::HardingInterpolator) = sampler.crop_size
 noise_eltype(sampler::HardingInterpolator) = eltype(sampler.out_buf)
