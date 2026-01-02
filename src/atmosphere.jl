@@ -124,7 +124,6 @@ end
 
 function HardingInterpolator(base, r0::Number, crop_size::NTuple{2,Int}=plate_size(base) .* 2 .- 1)
     low_size = plate_size(base)
-    @assert low_size[1] == low_size[2] "HardingInterpolator currently only supports square grids."
     @assert all(crop_size .≤ (2 .* low_size .- 1)) "crop_size must be less than or equal to (2*low_size - 1)."
     padded_size = 2 .* low_size .+ 5
     out = zeros(noise_eltype(base), padded_size..., batch_length(base))
@@ -135,65 +134,58 @@ noise_eltype(sampler::HardingInterpolator) = eltype(sampler.out_buf)
 batch_length(sampler::HardingInterpolator) = size(sampler.out_buf, 3)
 
 function samplephases!(interp::HardingInterpolator)
-    low = samplephases!(interp.base)
-    n, m = plate_size(interp.base)
-
-    # Harding stencil coefficients (Eq. 27)
     c_d = 0.3198
     c_m = -0.0341
     c_f = -0.0017
-
-    out_buf = interp.out_buf
+    std_scale = 2^(-5/12)
 
     # Padding offset: actual data starts at index 4
     offset = 3
-    inds_odd = (1:n) .* 2 .- 1 .+ offset
-    inds_even = (1:n-1) .* 2 .+ offset
+    n, m = plate_size(interp.base)
+    inds_odd_x = (1:n) .* 2 .- 1 .+ offset
+    inds_odd_y = (1:m) .* 2 .- 1 .+ offset
+    inds_even_x = (1:n-1) .* 2 .+ offset
+    inds_even_y = (1:m-1) .* 2 .+ offset
 
-    # Step 1: Copy low-res samples to even sites (1:2:end, 1:2:end)
-    out_buf[inds_odd, inds_odd, :] .= low
-    out_buf[[offset - 1, end - offset + 2], inds_odd, :] .= @view low[[1, end], :, :]
-    out_buf[inds_odd, [offset - 1, end - offset + 2], :] .= @view low[:, [1, end], :]
+    # Copy low-res
+    out_buf = interp.out_buf
+    low = samplephases!(interp.base)
+    out_buf[inds_odd_x, inds_odd_y, :] .= low
 
-    # Step 2: Interpolate diagonal sites (2:2:end, 2:2:end) with base stencil
-    @views @. out_buf[inds_even, inds_even, :] =
-        c_d * (out_buf[inds_even .+ 1, inds_even .+ 1, :] + out_buf[inds_even .+ 1, inds_even .- 1, :] +
-               out_buf[inds_even .- 1, inds_even .+ 1, :] + out_buf[inds_even .- 1, inds_even .- 1, :]) +
-        c_m * (out_buf[inds_even .+ 3, inds_even .+ 1, :] + out_buf[inds_even .+ 3, inds_even .- 1, :] +
-               out_buf[inds_even .- 3, inds_even .+ 1, :] + out_buf[inds_even .- 3, inds_even .- 1, :] +
-               out_buf[inds_even .+ 1, inds_even .+ 3, :] + out_buf[inds_even .+ 1, inds_even .- 3, :] +
-               out_buf[inds_even .- 1, inds_even .+ 3, :] + out_buf[inds_even .- 1, inds_even .- 3, :]) +
-        c_f * (out_buf[inds_even .+ 3, inds_even .+ 3, :] + out_buf[inds_even .+ 3, inds_even .- 3, :] +
-               out_buf[inds_even .- 3, inds_even .+ 3, :] + out_buf[inds_even .- 3, inds_even .- 3, :])
-    @views out_buf[[offset, end - offset + 1], inds_even, :] .= out_buf[[offset + 2, end - offset - 1], inds_even, :] .+ interp.noise_std .* randn.()
-    @views out_buf[inds_even, [offset, end - offset + 1], :] .= out_buf[inds_even, [offset + 2, end - offset - 1], :] .+ interp.noise_std .* randn.()
-    out_buf[inds_even, inds_even, :] .+= interp.noise_std .* randn.()
+    # Interpolate checker pattern sites
+    @views @. out_buf[inds_even_x, inds_even_y, :] =
+        c_d * (out_buf[inds_even_x .+ 1, inds_even_y .+ 1, :] + out_buf[inds_even_x .+ 1, inds_even_y .- 1, :] +
+               out_buf[inds_even_x .- 1, inds_even_y .+ 1, :] + out_buf[inds_even_x .- 1, inds_even_y .- 1, :]) +
+        c_m * (out_buf[inds_even_x .+ 3, inds_even_y .+ 1, :] + out_buf[inds_even_x .+ 3, inds_even_y .- 1, :] +
+               out_buf[inds_even_x .- 3, inds_even_y .+ 1, :] + out_buf[inds_even_x .- 3, inds_even_y .- 1, :] +
+               out_buf[inds_even_x .+ 1, inds_even_y .+ 3, :] + out_buf[inds_even_x .+ 1, inds_even_y .- 3, :] +
+               out_buf[inds_even_x .- 1, inds_even_y .+ 3, :] + out_buf[inds_even_x .- 1, inds_even_y .- 3, :]) +
+        c_f * (out_buf[inds_even_x .+ 3, inds_even_y .+ 3, :] + out_buf[inds_even_x .+ 3, inds_even_y .- 3, :] +
+               out_buf[inds_even_x .- 3, inds_even_y .+ 3, :] + out_buf[inds_even_x .- 3, inds_even_y .- 3, :]) +
+        interp.noise_std * randn()
 
-    # Step 4: Interpolate remaining sites with rotated & scaled stencil
+    # Fill remaining sites
+    @views @. out_buf[inds_odd_x, inds_even_y, :] =
+        c_d * (out_buf[inds_odd_x, inds_even_y .+ 1, :] + out_buf[inds_odd_x, inds_even_y .- 1, :] +
+                out_buf[inds_odd_x .+ 1, inds_even_y, :] + out_buf[inds_odd_x .- 1, inds_even_y, :]) +
+        c_m * (out_buf[inds_odd_x .+ 1, inds_even_y .+ 2, :] + out_buf[inds_odd_x .+ 1, inds_even_y .- 2, :] +
+                out_buf[inds_odd_x .- 1, inds_even_y .+ 2, :] + out_buf[inds_odd_x .- 1, inds_even_y .- 2, :] +
+                out_buf[inds_odd_x .+ 2, inds_even_y .+ 1, :] + out_buf[inds_odd_x .+ 2, inds_even_y .- 1, :] +
+                out_buf[inds_odd_x .- 2, inds_even_y .+ 1, :] + out_buf[inds_odd_x .- 2, inds_even_y .- 1, :]) +
+        c_f * (out_buf[inds_odd_x .+ 3, inds_even_y, :] + out_buf[inds_odd_x .- 3, inds_even_y, :] +
+                out_buf[inds_odd_x, inds_even_y .+ 3, :] + out_buf[inds_odd_x, inds_even_y .- 3, :]) +
+        interp.noise_std * std_scale * randn()
 
-    # (1:2:end, 2:2:end) sites
-    @views @. out_buf[inds_odd, inds_even, :] =
-        c_d * (out_buf[inds_odd, inds_even .+ 1, :] + out_buf[inds_odd, inds_even .- 1, :] +
-                out_buf[inds_odd .+ 1, inds_even, :] + out_buf[inds_odd .- 1, inds_even, :]) +
-        c_m * (out_buf[inds_odd .+ 1, inds_even .+ 2, :] + out_buf[inds_odd .+ 1, inds_even .- 2, :] +
-                out_buf[inds_odd .- 1, inds_even .+ 2, :] + out_buf[inds_odd .- 1, inds_even .- 2, :] +
-                out_buf[inds_odd .+ 2, inds_even .+ 1, :] + out_buf[inds_odd .+ 2, inds_even .- 1, :] +
-                out_buf[inds_odd .- 2, inds_even .+ 1, :] + out_buf[inds_odd .- 2, inds_even .- 1, :]) +
-        c_f * (out_buf[inds_odd .+ 3, inds_even, :] + out_buf[inds_odd .- 3, inds_even, :] +
-                out_buf[inds_odd, inds_even .+ 3, :] + out_buf[inds_odd, inds_even .- 3, :])
-    out_buf[inds_even, inds_odd, :] .+= (interp.noise_std / 2^(5/12)) .* randn.()
-
-    # (2:2:end, 1:2:end) sites
-    @views @. out_buf[inds_even, inds_odd, :] =
-        c_d * (out_buf[inds_even .+ 1, inds_odd, :] + out_buf[inds_even .- 1, inds_odd, :] +
-                out_buf[inds_even, inds_odd .+ 1, :] + out_buf[inds_even, inds_odd .- 1, :]) +
-        c_m * (out_buf[inds_even .+ 1, inds_odd .+ 2, :] + out_buf[inds_even .+ 1, inds_odd .- 2, :] +
-                out_buf[inds_even .- 1, inds_odd .+ 2, :] + out_buf[inds_even .- 1, inds_odd .- 2, :] +
-                out_buf[inds_even .+ 2, inds_odd .+ 1, :] + out_buf[inds_even .+ 2, inds_odd .- 1, :] +
-                out_buf[inds_even .- 2, inds_odd .+ 1, :] + out_buf[inds_even .- 2, inds_odd .- 1, :]) +
-        c_f * (out_buf[inds_even .+ 3, inds_odd, :] + out_buf[inds_even .- 3, inds_odd, :] +
-                out_buf[inds_even, inds_odd .+ 3, :] + out_buf[inds_even, inds_odd .- 3, :])
-    out_buf[inds_odd, inds_even, :] .+= (interp.noise_std / 2^(5/12)) .* randn.()
+    @views @. out_buf[inds_even_x, inds_odd_y, :] =
+        c_d * (out_buf[inds_even_x .+ 1, inds_odd_y, :] + out_buf[inds_even_x .- 1, inds_odd_y, :] +
+                out_buf[inds_even_x, inds_odd_y .+ 1, :] + out_buf[inds_even_x, inds_odd_y .- 1, :]) +
+        c_m * (out_buf[inds_even_x .+ 1, inds_odd_y .+ 2, :] + out_buf[inds_even_x .+ 1, inds_odd_y .- 2, :] +
+                out_buf[inds_even_x .- 1, inds_odd_y .+ 2, :] + out_buf[inds_even_x .- 1, inds_odd_y .- 2, :] +
+                out_buf[inds_even_x .+ 2, inds_odd_y .+ 1, :] + out_buf[inds_even_x .+ 2, inds_odd_y .- 1, :] +
+                out_buf[inds_even_x .- 2, inds_odd_y .+ 1, :] + out_buf[inds_even_x .- 2, inds_odd_y .- 1, :]) +
+        c_f * (out_buf[inds_even_x .+ 3, inds_odd_y, :] + out_buf[inds_even_x .- 3, inds_odd_y, :] +
+                out_buf[inds_even_x, inds_odd_y .+ 3, :] + out_buf[inds_even_x, inds_odd_y .- 3, :]) +
+        interp.noise_std * std_scale * randn()
 
     # Return unpadded view
     crop_offset = (size(out_buf)[1:2] .- interp.crop_size) .÷ 2
