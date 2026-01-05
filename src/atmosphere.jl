@@ -55,56 +55,78 @@ function samplephases!(sampler::KarhunenLoeveBuffers)
     return reshape(sampler.out_buffer, (sampler.shape..., size(sampler.out_buffer, 2)))
 end
 
+struct HardingSpec{N}
+    interpolate_from::NTuple{2,Int}
+end
+function HardingSpec(final_size::NTuple{2,Int}; interpolate=0, interpolate_from=nothing, size_heuristics=1024)
+    if interpolate_from !== nothing
+        any(interpolate_from .≤ 11) &&
+            throw(ArgumentError("`interpolate_from` dimensions must be greater than 11."))
+        interpolated_size = interpolate_from
+        n = 0
+        while any(final_size .> interpolated_size)
+            interpolated_size = 2 .* interpolated_size .- 11
+            n += 1
+        end
+        return HardingSpec{n}(interpolate_from)
+    elseif interpolate isa Number
+        interpolate_from = cld.(final_size .- 11, 2^interpolate) .+ 11
+        return HardingSpec{interpolate}(interpolate_from)
+    elseif interpolate === :auto
+        n = 0
+        interpolate_from = final_size
+        while prod(interpolate_from) .> size_heuristics
+            n += 1
+            interpolate_from = cld.(final_size .- 11, 2^n) .+ 11
+        end
+    else
+        throw(ArgumentError("`interpolate` must be a Number or :auto"))
+    end
+end
+
 """
-    IndependentFrames(size, r0[; interpolate_steps])
+    IndependentFrames(size, r0[; interpolate, interpolate_from, size_heuristics=1024])
 
 An `AtmosphereSpec` that produces independent (uncorrelated) phase frames for each timestep.
 
 # Arguments
 - `size`: a tuple `(nx, ny)` specifying the phase screen shape in pixels (coarse sampler grid).
 - `r0`: Fried parameter (r₀) in pixels.
-- `interpolate_steps`: when specified, the phase screen is sampled at a lower resolution and
-    then upsampled using specified number of Harding interpolation passes.
+- `interpolate`: when specified, the phase screen is sampled at a lower resolution and
+    then upsampled using specified number of Harding interpolation passes. If set to `:auto`,
+    the number of passes is chosen such that the low-res grid has at most `size_heuristics` total pixels.
+- `interpolate_from`: alternatively, specify the low-res grid size directly. This must be
+    greater than `(11, 11)` in each dimension.
+- `size_heuristics`: when `interpolate=:auto`, the maximum allowed number of pixels
+    in the low-res grid. Tweak this based on the capability of your hardware to compute `eigen`
+    of a `N×N` matrix, where `N` is the number of pixels in the low-res grid.
 
 # Notes
-This sampler is intentionally simple: frames are independent between timesteps and are
-generated using a Karhunen–Loève transform built from the Kolmogorov covariance.
-
 The Harding interpolation follows "Fast simulation of a Kolmogorov phase screen"
 Cressida M. Harding, Rachel A. Johnston, and Richard G. Lane, APPLIED OPTICS Vol. 38, No. 11, April 1999
 """
-struct IndependentFrames{T} <: AtmosphereSpec{T}
+struct IndependentFrames{T,N} <: AtmosphereSpec{T}
     size::NTuple{2, Int}
     r₀::T
-    interpolate_steps::Int
+    harding::HardingSpec{N}
 end
-IndependentFrames(sz::NTuple{2,Int}, r0::T; interpolate_steps=0) where T =
-    IndependentFrames{T}(sz, r0, interpolate_steps)
-IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0; interpolate_steps=0) where T =
-    IndependentFrames{T}(sz, r0, interpolate_steps)
-
-@inline function interpolate_sampler(sampler, r_0, target_size::NTuple{2,Int})
-    low_size = plate_size(sampler)
-    hi_size = 2 .* low_size .- 11
-    if all(target_size .≤ low_size)
-        return sampler
-    elseif all(target_size .≤ hi_size)
-        return HardingInterpolator(sampler, r_0, target_size)
-    else
-        return interpolate_sampler(
-            HardingInterpolator(sampler, r_0), r_0 * 2, target_size,
-        )
-    end
-end
-function prepare_phasebuffers(spec::IndependentFrames{T}, batch::Int, deviceadapter) where T
-    low_size = spec.size
-    low_size = cld.(low_size .+ (2^spec.interpolate_steps - 1) * 11, 2^spec.interpolate_steps)
+IndependentFrames(sz::NTuple{2,Int}, r0::T; kw...) where T =
+    IndependentFrames(sz, r0, HardingSpec(sz; kw...))
+IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0; kw...) where T =
+    IndependentFrames(sz, convert(T, r0), HardingSpec(sz; kw...))
+@inline interpolate_sampler(spec, r₀::Number, final_size::NTuple{2,Int}, ::Val{N}) where N =
+    interpolate_sampler(HardingInterpolator(spec, r₀), r₀ * 2, final_size, Val{N - 1}())
+interpolate_sampler(spec, r₀::Number, final_size::NTuple{2,Int}, ::Val{1}) =
+    HardingInterpolator(spec, r₀, final_size)
+interpolate_sampler(spec::HardingInterpolator, ::Number, ::NTuple{2,Int}, ::Val{0}) = spec
+function prepare_phasebuffers(spec::IndependentFrames{T,N}, batch::Int, deviceadapter) where {T,N}
+    low_size = spec.harding.interpolate_from
     covar = Adapt.adapt_storage(deviceadapter, kolmogorov_covmat(T, low_size))
-    low_r₀ = spec.r₀ / 2^(spec.interpolate_steps)
+    low_r₀ = spec.r₀ / 2^N
     covar .*= low_r₀^(-5/3)
-    E, U = eigen(covar)
+    E, U = eigen(Symmetric(covar))
     kl = KarhunenLoeveBuffers(low_size, (E, U), batch)
-    return interpolate_sampler(kl, low_r₀, spec.size)
+    return interpolate_sampler(kl, low_r₀, spec.size, Val(N))
 end
 
 """
