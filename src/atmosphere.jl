@@ -85,7 +85,7 @@ IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0; interpolate_steps=0) where T
 
 @inline function interpolate_sampler(sampler, r_0, target_size::NTuple{2,Int})
     low_size = plate_size(sampler)
-    hi_size = 2 .* low_size .- 1
+    hi_size = 2 .* low_size .- 11
     if all(target_size .≤ low_size)
         return sampler
     elseif all(target_size .≤ hi_size)
@@ -98,9 +98,7 @@ IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0; interpolate_steps=0) where T
 end
 function prepare_phasebuffers(spec::IndependentFrames{T}, batch::Int, deviceadapter) where T
     low_size = spec.size
-    for _ in 1:spec.interpolate_steps
-        low_size = low_size .÷ 2 .+ 1
-    end
+    low_size = cld.(low_size .+ (2^spec.interpolate_steps - 1) * 11, 2^spec.interpolate_steps)
     covar = Adapt.adapt_storage(deviceadapter, kolmogorov_covmat(T, low_size))
     low_r₀ = spec.r₀ / 2^(spec.interpolate_steps)
     covar .*= low_r₀^(-5/3)
@@ -122,10 +120,11 @@ struct HardingInterpolator{BT,AT}
     crop_size::NTuple{2,Int}
 end
 
-function HardingInterpolator(base, r0::Number, crop_size::NTuple{2,Int}=plate_size(base) .* 2 .- 1)
+function HardingInterpolator(base, r0::Number, crop_size::NTuple{2,Int}=plate_size(base) .* 2 .- 11)
     low_size = plate_size(base)
-    @assert all(crop_size .≤ (2 .* low_size .- 1)) "crop_size must be less than or equal to (2*low_size - 1)."
-    padded_size = 2 .* low_size .+ 5
+    all(crop_size .≤ (2 .* low_size .- 11)) ||
+        throw(ArgumentError("crop_size must be less than or equal to (2*low_size - 11)."))
+    padded_size = 2 .* low_size .- 1
     out = zeros(noise_eltype(base), padded_size..., batch_length(base))
     return HardingInterpolator(base, out, sqrt(0.5265 / r0^(5/3)), crop_size)
 end
@@ -140,17 +139,16 @@ function samplephases!(interp::HardingInterpolator)
     std_scale = 2^(-5/12)
 
     # Padding offset: actual data starts at index 4
-    offset = 3
     n, m = plate_size(interp.base)
-    inds_odd_x = (1:n) .* 2 .- 1 .+ offset
-    inds_odd_y = (1:m) .* 2 .- 1 .+ offset
-    inds_even_x = (1:n-1) .* 2 .+ offset
-    inds_even_y = (1:m-1) .* 2 .+ offset
+    inds_odd_x = (1:n-4) .* 2 .+ 3
+    inds_odd_y = (1:m-4) .* 2 .+ 3
+    inds_even_x = (1:n-3) .* 2 .+ 2
+    inds_even_y = (1:m-3) .* 2 .+ 2
 
     # Copy low-res
     out_buf = interp.out_buf
     low = samplephases!(interp.base)
-    out_buf[inds_odd_x, inds_odd_y, :] .= low
+    out_buf[1:2:end, 1:2:end, :] .= low
 
     # Interpolate checker pattern sites
     @views @. out_buf[inds_even_x, inds_even_y, :] =
