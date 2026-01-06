@@ -1,5 +1,7 @@
 using LinearAlgebra, FFTW, Distributions, HDF5, ProgressMeter, SparseArrays, Adapt
 
+const DEFAULT_BATCH = 512
+
 """
     FilterSpec
 
@@ -324,7 +326,7 @@ end
 end
 
 """
-    simulate_images([T, ]img_spec::ImagingSpec, atm_spec::AtmosphereSpec[, truesky::TrueSky];
+    simulate_images([T, ]img_spec::ImagingSpec, atm_spec::AtmosphereSpec[, truesky::TrueSky]; \
         n, [batch, filename, verbose, savephases, deviceadapter])
 
 Simulate `n` images using the provided imaging and atmosphere specifications and write
@@ -348,7 +350,7 @@ the results to an HDF5 file.
   pass e.g. `CUDA.CuArray` here (requires CUDA.jl).
 """
 function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::AtmosphereSpec{FT2},
-    truesky::TrueSky=PointSource(); n::Int, batch::Int=512, filename="simulation.h5", verbose=true,
+    truesky::TrueSky=PointSource(); n::Int, batch::Int=DEFAULT_BATCH, filename="simulation.h5", verbose=true,
     savephases::Bool=true, deviceadapter=Array) where {T,FT,FT2}
     if !isfinite_photons(truesky) && T <: Integer
         throw(ArgumentError("Integer image eltype not compatible with infinite-photon true sky model."))
@@ -409,7 +411,7 @@ the results to an HDF5 file.
 - `deviceadapter`: adapter for device-backed arrays (defaults to `Array`). To use GPU arrays,
   pass e.g. `CUDA.CuArray` here (requires CUDA.jl).
 """
-function simulate_phases(atm_spec::AtmosphereSpec{FT}; n::Int, batch::Int=512, filename="simulation.h5",
+function simulate_phases(atm_spec::AtmosphereSpec{FT}; n::Int, batch::Int=DEFAULT_BATCH, filename="simulation.h5",
         verbose=true, deviceadapter=Array) where {FT}
     batch = min(batch, n)
     phasebuffers = prepare_phasebuffers(atm_spec, batch, deviceadapter)
