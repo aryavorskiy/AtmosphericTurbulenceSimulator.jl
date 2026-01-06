@@ -47,12 +47,12 @@ function KarhunenLoeveBuffers(sz::NTuple{2,Int}, (E, U)::EigenType, batch::Int)
     KarhunenLoeveBuffers(sz, noise_buffer, noise_transform, out_buffer)
 end
 plate_size(sampler::KarhunenLoeveBuffers) = sampler.shape
-noise_eltype(sampler::KarhunenLoeveBuffers) = eltype(sampler.noise_buffer)
+out_buffer(sampler::KarhunenLoeveBuffers) = reshape(sampler.out_buffer, (sampler.shape..., size(sampler.out_buffer, 2)))
 batch_length(sampler::KarhunenLoeveBuffers) = size(sampler.noise_buffer, 2)
 function samplephases!(sampler::KarhunenLoeveBuffers)
     randn!(sampler.noise_buffer)
     mul!(sampler.out_buffer, sampler.noise_transform, sampler.noise_buffer)
-    return reshape(sampler.out_buffer, (sampler.shape..., size(sampler.out_buffer, 2)))
+    return out_buffer(sampler)
 end
 
 struct HardingSpec{N}
@@ -114,11 +114,6 @@ IndependentFrames(sz::NTuple{2,Int}, r0::T; kw...) where T =
     IndependentFrames(sz, r0, HardingSpec(sz; kw...))
 IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0; kw...) where T =
     IndependentFrames(sz, convert(T, r0), HardingSpec(sz; kw...))
-@inline interpolate_sampler(spec, r₀::Number, final_size::NTuple{2,Int}, ::Val{N}) where N =
-    interpolate_sampler(HardingInterpolator(spec, r₀), r₀ * 2, final_size, Val{N - 1}())
-interpolate_sampler(spec, r₀::Number, final_size::NTuple{2,Int}, ::Val{1}) =
-    HardingInterpolator(spec, r₀, final_size)
-interpolate_sampler(spec::HardingInterpolator, ::Number, ::NTuple{2,Int}, ::Val{0}) = spec
 function prepare_phasebuffers(spec::IndependentFrames{T,N}, batch::Int, deviceadapter) where {T,N}
     low_size = spec.harding.interpolate_from
     covar = Adapt.adapt_storage(deviceadapter, kolmogorov_covmat(T, low_size))
@@ -126,7 +121,11 @@ function prepare_phasebuffers(spec::IndependentFrames{T,N}, batch::Int, devicead
     covar .*= low_r₀^(-5/3)
     E, U = eigen(Symmetric(covar))
     kl = KarhunenLoeveBuffers(low_size, (E, U), batch)
-    return interpolate_sampler(kl, low_r₀, spec.size, Val(N))
+    if N == 0
+        return kl
+    else
+        return HardingInterpolator(kl, low_r₀, spec.size, Val(N))
+    end
 end
 
 """
@@ -135,41 +134,57 @@ Implements two-pass Harding interpolation: N×M → (2N-1)×(2M-1).
 First pass fills checker pattern with base stencil, second pass fills
 remaining sites with rotated stencil.
 """
-struct HardingInterpolator{BT,AT}
+struct HardingInterpolator{N,BT,AT}
     base::BT
-    out_buf::AT
+    out_bufs::NTuple{N,AT}
     noise_std::Float64
     crop_size::NTuple{2,Int}
 end
 
-function HardingInterpolator(base, r0::Number, crop_size::NTuple{2,Int}=plate_size(base) .* 2 .- 11)
+function HardingInterpolator(base, r0::Number, final_size, ::Val{N}) where N
     low_size = plate_size(base)
-    all(crop_size .≤ (2 .* low_size .- 11)) ||
-        throw(ArgumentError("crop_size must be less than or equal to (2*low_size - 11)."))
-    padded_size = 2 .* low_size .- 1
-    out = zeros(noise_eltype(base), padded_size..., batch_length(base))
-    return HardingInterpolator(base, out, sqrt(0.5265 / r0^(5/3)), crop_size)
+    any(low_size .≤ 11) && throw(ArgumentError("Dimensions must be greater than 11"))
+    buffers = ntuple(Val(N)) do i
+        lsz = low_size
+        for _ in 1:i
+            lsz = 2 .* lsz .- 11
+        end
+        similar(out_buffer(base), (lsz .+ 10)..., batch_length(base))
+    end
+    return HardingInterpolator(base, buffers, sqrt(0.5265 / r0^(5/3)), final_size)
 end
 plate_size(sampler::HardingInterpolator) = sampler.crop_size
-noise_eltype(sampler::HardingInterpolator) = eltype(sampler.out_buf)
+out_arrtype(sampler::HardingInterpolator) = typeof(sampler.out_buf)
 batch_length(sampler::HardingInterpolator) = size(sampler.out_buf, 3)
 
-function samplephases!(interp::HardingInterpolator)
+function samplephases!(harding::HardingInterpolator{N}) where N
+    low = samplephases!(harding.base)
+    upsample!(harding.out_bufs[1], low, harding.noise_std)
+    for i in 2:N
+        old_buf = harding.out_bufs[i - 1]
+        upsample!(harding.out_bufs[i], @view(old_buf[6:end-5, 6:end-5, :]), harding.noise_std / 2^(5/6 * (i-1)))
+    end
+    out_buf = harding.out_bufs[N]
+    crop_offset = (size(out_buf)[1:2] .- harding.crop_size) .÷ 2
+    return @view out_buf[
+        crop_offset[1] + 1:crop_offset[1] + harding.crop_size[1],
+        crop_offset[2] + 1:crop_offset[2] + harding.crop_size[2],
+        :]
+end
+function upsample!(out_buf, low, noise_std)
     c_d = 0.3198
     c_m = -0.0341
     c_f = -0.0017
     std_scale = 2^(-5/12)
 
     # Padding offset: actual data starts at index 4
-    n, m = plate_size(interp.base)
+    n, m = size(low)
     inds_odd_x = (1:n-4) .* 2 .+ 3
     inds_odd_y = (1:m-4) .* 2 .+ 3
     inds_even_x = (1:n-3) .* 2 .+ 2
     inds_even_y = (1:m-3) .* 2 .+ 2
 
     # Copy low-res
-    out_buf = interp.out_buf
-    low = samplephases!(interp.base)
     out_buf[1:2:end, 1:2:end, :] .= low
 
     # Interpolate checker pattern sites
@@ -182,7 +197,7 @@ function samplephases!(interp::HardingInterpolator)
                out_buf[inds_even_x .- 1, inds_even_y .+ 3, :] + out_buf[inds_even_x .- 1, inds_even_y .- 3, :]) +
         c_f * (out_buf[inds_even_x .+ 3, inds_even_y .+ 3, :] + out_buf[inds_even_x .+ 3, inds_even_y .- 3, :] +
                out_buf[inds_even_x .- 3, inds_even_y .+ 3, :] + out_buf[inds_even_x .- 3, inds_even_y .- 3, :]) +
-        interp.noise_std * randn()
+        noise_std * randn()
 
     # Fill remaining sites
     @views @. out_buf[inds_odd_x, inds_even_y, :] =
@@ -194,7 +209,7 @@ function samplephases!(interp::HardingInterpolator)
                 out_buf[inds_odd_x .- 2, inds_even_y .+ 1, :] + out_buf[inds_odd_x .- 2, inds_even_y .- 1, :]) +
         c_f * (out_buf[inds_odd_x .+ 3, inds_even_y, :] + out_buf[inds_odd_x .- 3, inds_even_y, :] +
                 out_buf[inds_odd_x, inds_even_y .+ 3, :] + out_buf[inds_odd_x, inds_even_y .- 3, :]) +
-        interp.noise_std * std_scale * randn()
+        noise_std * std_scale * randn()
 
     @views @. out_buf[inds_even_x, inds_odd_y, :] =
         c_d * (out_buf[inds_even_x .+ 1, inds_odd_y, :] + out_buf[inds_even_x .- 1, inds_odd_y, :] +
@@ -205,12 +220,5 @@ function samplephases!(interp::HardingInterpolator)
                 out_buf[inds_even_x .- 2, inds_odd_y .+ 1, :] + out_buf[inds_even_x .- 2, inds_odd_y .- 1, :]) +
         c_f * (out_buf[inds_even_x .+ 3, inds_odd_y, :] + out_buf[inds_even_x .- 3, inds_odd_y, :] +
                 out_buf[inds_even_x, inds_odd_y .+ 3, :] + out_buf[inds_even_x, inds_odd_y .- 3, :]) +
-        interp.noise_std * std_scale * randn()
-
-    # Return unpadded view
-    crop_offset = (size(out_buf)[1:2] .- interp.crop_size) .÷ 2
-    return @view out_buf[
-        crop_offset[1] + 1:crop_offset[1] + interp.crop_size[1],
-        crop_offset[2] + 1:crop_offset[2] + interp.crop_size[2],
-        :]
+        noise_std * std_scale * randn()
 end
