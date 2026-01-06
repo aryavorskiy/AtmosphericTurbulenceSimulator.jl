@@ -47,8 +47,8 @@ function KarhunenLoeveBuffers(sz::NTuple{2,Int}, (E, U)::EigenType, batch::Int)
     KarhunenLoeveBuffers(sz, noise_buffer, noise_transform, out_buffer)
 end
 plate_size(sampler::KarhunenLoeveBuffers) = sampler.shape
-out_buffer(sampler::KarhunenLoeveBuffers) = reshape(sampler.out_buffer, (sampler.shape..., size(sampler.out_buffer, 2)))
 batch_length(sampler::KarhunenLoeveBuffers) = size(sampler.noise_buffer, 2)
+out_buffer(sampler::KarhunenLoeveBuffers) = reshape(sampler.out_buffer, (sampler.shape..., size(sampler.out_buffer, 2)))
 function samplephases!(sampler::KarhunenLoeveBuffers)
     randn!(sampler.noise_buffer)
     mul!(sampler.out_buffer, sampler.noise_transform, sampler.noise_buffer)
@@ -56,6 +56,7 @@ function samplephases!(sampler::KarhunenLoeveBuffers)
 end
 
 struct HardingSpec{N}
+    interpolate_to::NTuple{2,Int}
     interpolate_from::NTuple{2,Int}
 end
 function HardingSpec(final_size::NTuple{2,Int}; interpolate=0, interpolate_from=nothing, size_heuristics=1024)
@@ -68,10 +69,10 @@ function HardingSpec(final_size::NTuple{2,Int}; interpolate=0, interpolate_from=
             interpolated_size = 2 .* interpolated_size .- 11
             n += 1
         end
-        return HardingSpec{n}(interpolate_from)
+        return HardingSpec{n}(final_size, interpolate_from)
     elseif interpolate isa Number
         interpolate_from = cld.(final_size .- 11, 2^interpolate) .+ 11
-        return HardingSpec{interpolate}(interpolate_from)
+        return HardingSpec{interpolate}(final_size, interpolate_from)
     elseif interpolate === :auto
         n = 0
         interpolate_from = final_size
@@ -79,13 +80,14 @@ function HardingSpec(final_size::NTuple{2,Int}; interpolate=0, interpolate_from=
             n += 1
             interpolate_from = cld.(final_size .- 11, 2^n) .+ 11
         end
+        return HardingSpec{n}(final_size, interpolate_from)
     else
         throw(ArgumentError("`interpolate` must be a Number or :auto"))
     end
 end
 
 """
-    IndependentFrames(size, r0[; interpolate, interpolate_from, size_heuristics=1024])
+    SingleLayer(size, r0[; interpolate, interpolate_from, size_heuristics=1024])
 
 An `AtmosphereSpec` that produces independent (uncorrelated) phase frames for each timestep.
 
@@ -105,16 +107,15 @@ An `AtmosphereSpec` that produces independent (uncorrelated) phase frames for ea
 The Harding interpolation follows "Fast simulation of a Kolmogorov phase screen"
 Cressida M. Harding, Rachel A. Johnston, and Richard G. Lane, APPLIED OPTICS Vol. 38, No. 11, April 1999
 """
-struct IndependentFrames{T,N} <: AtmosphereSpec{T}
-    size::NTuple{2, Int}
-    r₀::T
+struct SingleLayer{T,N} <: AtmosphereSpec{T}
     harding::HardingSpec{N}
+    r₀::T
 end
-IndependentFrames(sz::NTuple{2,Int}, r0::T; kw...) where T =
-    IndependentFrames(sz, r0, HardingSpec(sz; kw...))
-IndependentFrames(::Type{T}, sz::NTuple{2,Int}, r0; kw...) where T =
-    IndependentFrames(sz, convert(T, r0), HardingSpec(sz; kw...))
-function prepare_phasebuffers(spec::IndependentFrames{T,N}, batch::Int, deviceadapter) where {T,N}
+SingleLayer(sz::NTuple{2,Int}, r0::T; kw...) where T =
+    SingleLayer(HardingSpec(sz; kw...), r0)
+SingleLayer(::Type{T}, sz::NTuple{2,Int}, r0; kw...) where T =
+    SingleLayer(HardingSpec(sz; kw...), convert(T, float(r0)))
+function prepare_phasebuffers(spec::SingleLayer{T,N}, batch::Int, deviceadapter) where {T,N}
     low_size = spec.harding.interpolate_from
     covar = Adapt.adapt_storage(deviceadapter, kolmogorov_covmat(T, low_size))
     low_r₀ = spec.r₀ / 2^N
@@ -122,7 +123,7 @@ function prepare_phasebuffers(spec::IndependentFrames{T,N}, batch::Int, devicead
     E, U = eigen(Symmetric(covar))
     kl = KarhunenLoeveBuffers(low_size, (E, U), batch)
     N == 0 && return kl
-    return HardingInterpolator(kl, low_r₀, spec.size, Val(N))
+    return HardingInterpolator(kl, low_r₀, spec.harding)
 end
 
 """
@@ -133,13 +134,12 @@ remaining sites with rotated stencil.
 """
 struct HardingInterpolator{N,BT,AT}
     base::BT
-    out_bufs::NTuple{N,AT}
+    out_buffers::NTuple{N,AT}
     noise_std::Float64
     crop_size::NTuple{2,Int}
 end
-
-function HardingInterpolator(base, r0::Number, final_size, ::Val{N}) where N
-    low_size = plate_size(base)
+function HardingInterpolator(base, r0::Number, hspec::HardingSpec{N}) where N
+    low_size = hspec.interpolate_from
     any(low_size .≤ 11) && throw(ArgumentError("Dimensions must be greater than 11"))
     buffers = ntuple(Val(N)) do i
         lsz = low_size
@@ -148,21 +148,21 @@ function HardingInterpolator(base, r0::Number, final_size, ::Val{N}) where N
         end
         similar(out_buffer(base), (lsz .+ 10)..., batch_length(base))
     end
-    return HardingInterpolator(base, buffers, sqrt(0.5265 / r0^(5/3)), final_size)
+    return HardingInterpolator(base, buffers, sqrt(0.5265 / r0^(5/3)), hspec.interpolate_to)
 end
 plate_size(sampler::HardingInterpolator) = sampler.crop_size
-batch_length(sampler::HardingInterpolator) = size(sampler.out_bufs[end], 3)
-out_buffer(sampler::HardingInterpolator) = sampler.out_bufs[end]
+batch_length(sampler::HardingInterpolator) = size(sampler.out_buffers[end], 3)
+out_buffer(sampler::HardingInterpolator) = sampler.out_buffers[end]
 
 function samplephases!(harding::HardingInterpolator{N}) where N
     low = samplephases!(harding.base)
-    harding_upsample!(harding.out_bufs[1], low, harding.noise_std)
-    foreach(2:N) do i
-        prev_buf = harding.out_bufs[i - 1]
-        harding_upsample!(harding.out_bufs[i], @view(prev_buf[6:end-5, 6:end-5, :]),
+    harding_upsample!(harding.out_buffers[1], low, harding.noise_std)
+    for i in 2:N
+        prev_buf = harding.out_buffers[i - 1]
+        harding_upsample!(harding.out_buffers[i], @view(prev_buf[6:end-5, 6:end-5, :]),
             harding.noise_std / 2^(5/6 * (i-1)))
     end
-    out_buf = harding.out_bufs[N]
+    out_buf = harding.out_buffers[N]
     crop_offset = (size(out_buf)[1:2] .- harding.crop_size) .÷ 2
     return @view out_buf[
         crop_offset[1] + 1:crop_offset[1] + harding.crop_size[1],

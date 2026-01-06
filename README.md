@@ -7,7 +7,7 @@ containing the simulated images and optionally the phase screens used to generat
 
 ## Installation
 
-This package is not registered. You can install it with the following command in Julia's REPL:
+This package is not registered yet. You can install it with the following command in Julia's REPL:
 
 ```julia
 using Pkg
@@ -29,7 +29,7 @@ img_spec = ImagingSpec(ap, nyquist_oversample=1)
 
 # Atmosphere: independent phase patterns with r0 = 0.2 m
 # Assuming Kolmogorov turbulence, a 2 m telescope aperture and 64-pixel images
-atm = IndependentFrames((64, 64), 0.2 / 2 * 50)
+atm = SingleLayer((64, 64), 0.2 / 2 * 50)
 
 # True sky: point source (1e7 photons per PSF, 200 photon per pixel background)
 ts = PointSource(1e7, 200)
