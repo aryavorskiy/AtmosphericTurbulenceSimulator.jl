@@ -1,6 +1,6 @@
 name = "AtmosphericTurbulenceSimulator"
 uuid = "b10e1436-1925-4c36-93d0-25dc9f56f811"
-version = "0.1.1"
+version = "0.2.0"
 authors = ["aryavorskiy <aleksandr.iavorskii@weizmann.ac.il>"]
 
 [deps]
