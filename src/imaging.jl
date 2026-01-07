@@ -146,12 +146,13 @@ struct TrueSkyImage{T, MT<:AbstractMatrix{Complex{T}}} <: TrueSky{T}
 end
 function TrueSkyImage(true_sky::AbstractMatrix{T}, brightness=PointSource()) where {T<:Real}
     true_sky_fft = ifft(ifftshift(true_sky))
-    return new{T, typeof(true_sky_fft)}(true_sky_fft, convert(PointSource{T}, brightness))
+    true_sky_fft ./= true_sky_fft[1, 1]  # normalize DC component to 1
+    return TrueSkyImage{T, typeof(true_sky_fft)}(true_sky_fft, convert(TrueSky{T}, brightness))
 end
 TrueSkyImage(mat::AbstractMatrix; kw...) =
     TrueSkyImage(mat, PointSource(; kw...))
 Base.convert(::Type{TrueSky{T}}, b::TrueSkyImage) where {T<:Real} =
-    TrueSkyImage{T, typeof(b.true_sky_fft)}(convert.(Complex{T}, b.true_sky_fft), convert(PointSource{T}, b.brightness))
+    TrueSkyImage{T, typeof(b.true_sky_fft)}(convert.(Complex{T}, b.true_sky_fft), convert(TrueSky{T}, b.brightness))
 Adapt.adapt_structure(to, ts::TrueSkyImage) =
     TrueSkyImage(Adapt.adapt_storage(to, ts.true_sky_fft), ts.brightness)
 isfinite_photons(ts::TrueSkyImage) = isfinite_photons(ts.brightness)
@@ -249,7 +250,7 @@ function apply_image!(dst, ibufs::ImagingBuffers, ds::DoubleSystem, psf_norm)
     s1_dest, s1_src = o1 > 0 ? (o1 + 1:size(img, 1), 1:size(img, 1) - o1) : (1:size(img, 1) + o1, -o1 + 1:size(img, 1))
     s2_dest, s2_src = o2 > 0 ? (o2 + 1:size(img, 2), 1:size(img, 2) - o2) : (1:size(img, 2) + o2, -o2 + 1:size(img, 2))
     @views @. img[s1_dest, s2_dest, :] += img[s1_src, s2_src, :] * ds.intensity
-    apply_image!(dst, ibufs, ds.brightness, psf_norm)
+    apply_image!(dst, ibufs, ds.brightness, psf_norm * (1 + ds.intensity))
 end
 function apply_image!(dst, ibufs::ImagingBuffers, pt::PointSource, psf_norm)
     img = ibufs.focal_buffer
@@ -366,11 +367,11 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::Atmosph
     imgbuffers = prepare_imgbuffers(T, img_spec, batch, deviceadapter)
 
     h5open(filename, "w") do fid
+        fid["aperture"] = img_spec.aperture
         img_dataset = create_dataset(fid, "images", T, (img_size..., n), chunk=(img_size..., batch))
         p = Progress(n, "Simulating images", enabled=verbose, dt=1)
         if savephases
             phs_size = plate_size(phasebuffers)
-            fid["aperture"] = img_spec.aperture
             phs_dataset = create_dataset(fid, "phases", FT2, (phs_size..., n), chunk=(phs_size..., batch))
             phase_buf_h5 = zeros(FT2, phs_size..., batch)
         end
@@ -393,44 +394,3 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::Atmosph
 end
 simulate_images(img_spec::ImagingSpec, phase_sampler::AtmosphereSpec, true_sky::TrueSky=PointSource(); kwargs...) =
     simulate_images(isfinite_photons(true_sky) ? Int : Float64, img_spec, phase_sampler, true_sky; kwargs...)
-
-"""
-    simulate_phases(phase_sampler::AtmosphereSpec; n, [batch, filename, verbose, deviceadapter])
-
-Simulate `n` phase screens using the provided atmosphere specification and write
-the results to an HDF5 file.
-
-# Arguments
-- `atm_spec`: an `AtmosphereSpec` used to produce phase screens.
-
-# Keyword Arguments
-- `n`: number of phase screens to simulate.
-- `batch`: batch size for buffered computations and HDF5 writes (default 512).
-- `filename`: output HDF5 filename (default "simulation.h5").
-- `verbose`: show progress meter (true by default).
-- `deviceadapter`: adapter for device-backed arrays (defaults to `Array`). To use GPU arrays,
-  pass e.g. `CUDA.CuArray` here (requires CUDA.jl).
-"""
-function simulate_phases(atm_spec::AtmosphereSpec{FT}; n::Int, batch::Int=DEFAULT_BATCH, filename="simulation.h5",
-        verbose=true, deviceadapter=Array) where {FT}
-    batch = min(batch, n)
-    phasebuffers = prepare_phasebuffers(atm_spec, batch, deviceadapter)
-
-    h5open(filename, "w") do fid
-        phs_size = plate_size(phasebuffers)
-        phs_dataset = create_dataset(fid, "phases", FT, (phs_size..., n), chunk=(phs_size..., batch))
-        p = Progress(n, "Simulating phases", enabled=verbose, dt=1)
-        phase_buf_h5 = zeros(FT, phs_size..., batch)
-        for j in 1:cld(n, batch)
-            phases = samplephases!(phasebuffers)
-            if phases isa Array
-                HDF5.write_chunk(phs_dataset, j - 1, phases)
-            else
-                copy!(phase_buf_h5, phases)
-                HDF5.write_chunk(phs_dataset, j - 1, phase_buf_h5)
-            end
-            next!(p, step=min(batch, n - (j - 1) * batch))
-        end
-        finish!(p)
-    end
-end

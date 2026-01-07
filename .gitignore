@@ -1,3 +1,6 @@
 Manifest.toml
 *.h5
+*.ipynb
 *.pb.gz
+docs/build/*
+**/.DS_Store

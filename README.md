@@ -1,5 +1,7 @@
 # AtmosphericTurbulenceSimulator
 
+[![docs-dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://aryavorskiy.github.io/AtmosphericTurbulenceSimulator/dev/)
+
 A simple (yet) Julia toolchain to simulate atmospheric turbulence effects on imaging systems. It provides
 utilities to define different telescope apertures and true sky models; the phase screens are generated
 using common statistical models of atmospheric turbulence. The output is written into a HDF5 file
@@ -11,7 +13,7 @@ This package is not registered yet. You can install it with the following comman
 
 ```julia
 using Pkg
-Pkg.add(path="https://github.com/aryavorskiy/AtmosphericTurbulenceSimulator")
+Pkg.add(url="https://github.com/aryavorskiy/AtmosphericTurbulenceSimulator")
 ```
 
 ## Quick example
@@ -104,7 +106,7 @@ fig
 
 This toolchain utilizes Julia's multi-threading capabilities; add more threads by launching Julia with `julia --threads=N`, where `N` is the number of threads you want. You can set `N=auto` to use all available CPU threads.
 
-To enable CUDA (or other GPU backends), import the respective packages (e.g., `CUDA.jl`) and add `deviceadapter=CuArray` (or other device array type) to the `simulate_phases`/`simulate_images` function call. As of version 0.1, only [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) is tested for compatibility, feel free to open an issue if you encounter problems with other backends.
+To enable CUDA (or other GPU backends), import the respective packages (e.g., `CUDA.jl`) and add `deviceadapter=CuArray` (or other device array type) to the `simulate_phases`/`simulate_images` function call. As of current version, only [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) is tested, feel free to open an issue if you encounter problems with other backends.
 
 Please note that this package is in early development. There are multiple features planned for the future:
 - More advanced atmosphere models
@@ -113,6 +115,7 @@ Please note that this package is in early development. There are multiple featur
     - [ ] Multi-layer atmospheres
 - More advanced imaging models
     - [ ] Multi-wavelength imaging
+    - [ ] Non-achromatic optical systems
     - [ ] Non-circular apertures
     - [ ] Off-axis propagation
 - [ ] FITS support (?)

@@ -94,6 +94,8 @@ An `AtmosphereSpec` that produces independent (uncorrelated) phase frames for ea
 # Arguments
 - `size`: a tuple `(nx, ny)` specifying the phase screen shape in pixels (coarse sampler grid).
 - `r0`: Fried parameter (r₀) in pixels.
+
+# Keyword Arguments
 - `interpolate`: when specified, the phase screen is sampled at a lower resolution and
     then upsampled using specified number of Harding interpolation passes. If set to `:auto`,
     the number of passes is chosen such that the low-res grid has at most `size_heuristics` total pixels.
@@ -115,6 +117,7 @@ SingleLayer(sz::NTuple{2,Int}, r0::T; kw...) where T =
     SingleLayer(HardingSpec(sz; kw...), r0)
 SingleLayer(::Type{T}, sz::NTuple{2,Int}, r0; kw...) where T =
     SingleLayer(HardingSpec(sz; kw...), convert(T, float(r0)))
+plate_size(spec::SingleLayer) = spec.harding.interpolate_to
 function prepare_phasebuffers(spec::SingleLayer{T,N}, batch::Int, deviceadapter) where {T,N}
     low_size = spec.harding.interpolate_from
     covar = Adapt.adapt_storage(deviceadapter, kolmogorov_covmat(T, low_size))
@@ -126,12 +129,6 @@ function prepare_phasebuffers(spec::SingleLayer{T,N}, batch::Int, deviceadapter)
     return HardingInterpolator(kl, low_r₀, spec.harding)
 end
 
-"""
-Harding interpolator wrapper around another sampler.
-Implements two-pass Harding interpolation: N×M → (2N-1)×(2M-1).
-First pass fills checker pattern with base stencil, second pass fills
-remaining sites with rotated stencil.
-"""
 struct HardingInterpolator{N,BT,AT}
     base::BT
     out_buffers::NTuple{N,AT}
@@ -221,4 +218,45 @@ function harding_upsample!(out_buf, low, noise_std)
                 out_buf[inds_even_x .- 2, inds_odd_y .+ 1, :] + out_buf[inds_even_x .- 2, inds_odd_y .- 1, :]) +
         c_f * (out_buf[inds_even_x .+ 3, inds_odd_y, :] + out_buf[inds_even_x .- 3, inds_odd_y, :] +
                 out_buf[inds_even_x, inds_odd_y .+ 3, :] + out_buf[inds_even_x, inds_odd_y .- 3, :])
+end
+
+"""
+    simulate_phases(phase_sampler::AtmosphereSpec; n, [batch, filename, verbose, deviceadapter])
+
+Simulate `n` phase screens using the provided atmosphere specification and write
+the results to an HDF5 file.
+
+# Arguments
+- `atm_spec`: an `AtmosphereSpec` used to produce phase screens.
+
+# Keyword Arguments
+- `n`: number of phase screens to simulate.
+- `batch`: batch size for buffered computations and HDF5 writes (default 512).
+- `filename`: output HDF5 filename (default "simulation.h5").
+- `verbose`: show progress meter (true by default).
+- `deviceadapter`: adapter for device-backed arrays (defaults to `Array`). To use GPU arrays,
+  pass e.g. `CUDA.CuArray` here (requires CUDA.jl).
+"""
+function simulate_phases(atm_spec::AtmosphereSpec{FT}; n::Int, batch::Int=DEFAULT_BATCH, filename="simulation.h5",
+        verbose=true, deviceadapter=Array) where {FT}
+    batch = min(batch, n)
+    phasebuffers = prepare_phasebuffers(atm_spec, batch, deviceadapter)
+
+    h5open(filename, "w") do fid
+        phs_size = plate_size(atm_spec)
+        phs_dataset = create_dataset(fid, "phases", FT, (phs_size..., n), chunk=(phs_size..., batch))
+        p = Progress(n, "Simulating phases", enabled=verbose, dt=1)
+        phase_buf_h5 = zeros(FT, phs_size..., batch)
+        for j in 1:cld(n, batch)
+            phases = samplephases!(phasebuffers)
+            if phases isa Array
+                HDF5.write_chunk(phs_dataset, j - 1, phases)
+            else
+                copy!(phase_buf_h5, phases)
+                HDF5.write_chunk(phs_dataset, j - 1, phase_buf_h5)
+            end
+            next!(p, step=min(batch, n - (j - 1) * batch))
+        end
+        finish!(p)
+    end
 end
