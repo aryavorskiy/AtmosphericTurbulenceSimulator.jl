@@ -6,14 +6,16 @@ DocMeta.setdocmeta!(AtmosphericTurbulenceSimulator, :DocTestSetup, :(using Atmos
 makedocs(
     sitename = "AtmosphericTurbulenceSimulator.jl",
     modules = [AtmosphericTurbulenceSimulator],
-    format = Documenter.HTML(),
+    format = Documenter.HTML(
+        prettyurls = get(ENV, "CI", "false") == "true"
+    ),
     pages = [
-        "Tutorial" => "index.md",
+        "Overview" => "index.md",
         "API Reference" => "api.md",
     ],
 )
 
 deploydocs(
-    repo = "github.com/aryavorskiy/AtmosphericTurbulenceSimulator",
+    repo = Remotes.GitHub("aryavorskiy", "AtmosphericTurbulenceSimulator.jl"),
     devbranch = "master",
 )

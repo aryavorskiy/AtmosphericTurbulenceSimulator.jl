@@ -4,14 +4,15 @@ abstract type AtmosphereSpec{T} end
 
 """
     kolmogorov_covmat(W)
+    kolmogorov_covmat([T, ]size)
 
 Compute the phase covariance matrix of a turbulent layer in the atmosphere, following the Kolmogorov model. The piston
-term is excluded in this model. This function assumes unit Fried parameter r0=1.
+term is excluded in this model. This function assumes unit Fried parameter ``r_0 = 1 px``.
 
 # Arguments
-- `W`: the aperture function. Either a 2D array, or a `(x, y)` tuple representing the size
-    of the aperture (in this case the aperture function is assumed to be a square of this
-    size).
+- `W`: the aperture function as a 2D array of weights. Normalized to `sum(W) == 1` internally.
+- `size`: a tuple `(nx, ny)` specifying the size of the aperture function.
+- `T`: element type for the covariance matrix (default `Float64`). If the aperture function `W` is provided, its element type is used.
 """
 function kolmogorov_covmat(W::AbstractMatrix)
     I = eachindex(IndexCartesian(), W)
@@ -21,13 +22,12 @@ function kolmogorov_covmat(W::AbstractMatrix)
         y = I[i][2] - I[j][2]
         C[i, j] = -0.5 * 6.88 * (x^2 + y^2)^(5/6)
     end
-    @assert sum(W) ≈ 1
-    Cp = vec(sum(C .* vec(W)', dims=2))
-    Cc = sum(Cp .* vec(W))
+    Wp = W ./ sum(W)
+    Cp = vec(sum(C .* vec(Wp)', dims=2))
+    Cc = sum(Cp .* vec(Wp))
     return Symmetric(C .- Cp .- Cp' .+ Cc)
 end
-kolmogorov_covmat(::Type{T}, sz::NTuple{2,Int}) where T =
-    kolmogorov_covmat(fill(convert(T, 1/prod(sz)), sz...))
+kolmogorov_covmat(::Type{T}, sz::NTuple{2,Int}) where T = kolmogorov_covmat(ones(T, sz))
 kolmogorov_covmat(sz::NTuple{2,Int}) = kolmogorov_covmat(Float64, sz)
 
 const EigenType = Union{Tuple{<:Any,<:Any}, Eigen}
@@ -221,7 +221,7 @@ function harding_upsample!(out_buf, low, noise_std)
 end
 
 """
-    simulate_phases(phase_sampler::AtmosphereSpec; n, [batch, filename, verbose, deviceadapter])
+    simulate_phases(atm_spec::AtmosphereSpec; n, [batch, filename, verbose, deviceadapter])
 
 Simulate `n` phase screens using the provided atmosphere specification and write
 the results to an HDF5 file.

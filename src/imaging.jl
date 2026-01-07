@@ -55,7 +55,7 @@ function prepare_spmat(::Type{T}, img_size, bspec::FilterSpec) where T<:Real
     nx, ny = img_size
     for k in eachindex(bspec.wavelengths)
         r = bspec.wavelengths[k] / bspec.base_wavelength
-        inten = bspec.intensities[k]
+        inten = bspec.intensities[k] / r^2
         for j in 1:ny
             dy = j - ctr2
             sy = ctr2 + dy * r
@@ -92,8 +92,9 @@ Poisson-sample pixel values according to the PSF-normalized flux with added back
 `Inf` the continuous flux is used (no shot noise), and background is ignored.
 
 # Arguments
-- `nphotons`: total photons for the source (or `Inf` for continuous mode).
-- `background`: constant background added to the flux in photons per pixel.
+- `nphotons`: total photons for the source (or `Inf` for continuous mode). Defaults to `Inf`.
+- `background`: constant background added to the flux in photons per pixel. Ignored in
+    continuous mode, defaults to `1.0` otherwise.
 """
 @kwdef struct PointSource{T} <: TrueSky{T}
     nphotons::T=Inf
@@ -187,6 +188,10 @@ ImagingSpec(aperture, filter_spec=FilterSpec(1, [1], [1]); nyquist_oversample=1)
         convert(FilterSpec{eltype(aperture)}, filter_spec))
 Adapt.adapt_structure(to, imgspec::ImagingSpec) =
     ImagingSpec(Adapt.adapt_storage(to, imgspec.aperture), imgspec.img_size, imgspec.filter_spec)
+plate_size(img_spec::ImagingSpec) = size(img_spec.aperture)
+image_size(img_spec::ImagingSpec) = img_spec.img_size
+psf_norm(img_spec::ImagingSpec) = sum(abs2, img_spec.aperture) * prod(img_spec.img_size) *
+        sum(img_spec.filter_spec.intensities)
 
 struct ImagingBuffers{AT, BT, MT, PT}
     aperture::AT
@@ -359,9 +364,7 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::Atmosph
     batch = min(batch, n)
     img_size = img_spec.img_size
     real_img = zeros(T, img_size..., batch)
-    psf_norm = sum(abs2, img_spec.aperture) * prod(img_size) *
-        sum(img_spec.filter_spec.intensities .* img_spec.filter_spec.wavelengths .^ 2) /
-        img_spec.filter_spec.base_wavelength ^ 2
+    spec_psf_norm = psf_norm(img_spec)
     truesky_adapt = adapt(deviceadapter, convert(TrueSky{FT}, truesky))
     phasebuffers = prepare_phasebuffers(atm_spec, batch, deviceadapter)
     imgbuffers = prepare_imgbuffers(T, img_spec, batch, deviceadapter)
@@ -377,7 +380,7 @@ function simulate_images(::Type{T}, img_spec::ImagingSpec{FT}, atm_spec::Atmosph
         end
         for j in 1:cld(n, batch)
             phases = samplephases!(phasebuffers)
-            imagephases!(real_img, imgbuffers, phases, truesky_adapt, psf_norm)
+            imagephases!(real_img, imgbuffers, phases, truesky_adapt, spec_psf_norm)
             HDF5.write_chunk(img_dataset, j - 1, real_img)
             if savephases
                 if phases isa Array

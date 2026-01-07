@@ -73,7 +73,7 @@ The [`ImagingSpec`](@ref) combines the aperture with detector parameters. The `n
 Note that the Nyquist oversampling affects the PSF size, so it does not match the aperture grid size directly. You can specify the imaging grid size explicitly by passing it as a positional argument to [`ImagingSpec`](@ref).
 
 !!! note
-    The non-monochromatic PSF simulation assumes the telescope itself is achromatic, i.e., the aperture function does not depend on wavelength. The wavelength dependence only enters through the Fried parameter ``r_0(\lambda) \propto \lambda^{6/5}`` and the diffraction limit ``\lambda / D``.
+    The non-monochromatic PSF simulation assumes the telescope itself is achromatic, i.e., the aperture function does not depend on wavelength. The wavelength dependence only enters through the Fried parameter ``r_0(\lambda) \propto \lambda^{6/5}`` and the diffraction limit ``\lambda / D``. This is a good approximation only for narrow bands.
 
 For the true sky, use [`PointSource`](@ref) for a single point source, [`DoubleSystem`](@ref) for a binary, or [`TrueSkyImage`](@ref) for arbitrary extended objects. The brightness can be specified as a finite photon count (Poisson-sampled) or infinite (continuous flux):
 
