@@ -1,6 +1,6 @@
 # AtmosphericTurbulenceSimulator
 
-[![docs-dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://aryavorskiy.github.io/AtmosphericTurbulenceSimulator/dev/)
+[![docs-dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://aryavorskiy.github.io/AtmosphericTurbulenceSimulator.jl/dev/)
 
 A simple (yet) Julia toolchain to simulate atmospheric turbulence effects on imaging systems. It provides
 utilities to define different telescope apertures and true sky models; the phase screens are generated
@@ -13,7 +13,7 @@ This package is not registered yet. You can install it with the following comman
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/aryavorskiy/AtmosphericTurbulenceSimulator")
+Pkg.add(url="https://github.com/aryavorskiy/AtmosphericTurbulenceSimulator.jl")
 ```
 
 ## Quick example

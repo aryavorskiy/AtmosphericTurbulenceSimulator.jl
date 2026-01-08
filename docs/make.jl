@@ -16,6 +16,6 @@ makedocs(
 )
 
 deploydocs(
-    repo = Remotes.GitHub("aryavorskiy", "AtmosphericTurbulenceSimulator.jl"),
+    repo = "github.com/aryavorskiy/AtmosphericTurbulenceSimulator.jl.git",
     devbranch = "master",
 )
