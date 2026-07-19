@@ -102,8 +102,8 @@ Specifies the photon budget for imaging simulations. Set `nphotons` to `Inf` for
 continuous flux (`background` can be omitted in this case).
 
 # Keyword Arguments
-- `gaussian_approx`: when true, Poisson noise is approximated by a rounded Gaussian
-  instead of sampled exactly (default `false`).
+- `gaussian_approx`: when true, Poisson noise is approximated by either a rounded Gaussian
+  or an exact sampler (for λ < 10, Knuth counting). Default `false` (exact everywhere via `Distributions`).
 """
 struct PhotonCount{GA,T<:Real}
     nphotons::T
@@ -322,7 +322,23 @@ function apply_truesky!(opt_buffer::OpticalBuffers, ds::DoubleSystem)
 end
 apply_truesky!(::OpticalBuffers, ::PointSource) = nothing
 
-_sample_poisson(::Val{true}, ::Type{T}, λ) where {T} = round(T, max(randn() * sqrt(λ) + λ, zero(λ)))
+const GAUSSIAN_POISSON_CUTOFF = 10
+const KNUTH_MAXITER = round(Int, GAUSSIAN_POISSON_CUTOFF + 5 * sqrt(GAUSSIAN_POISSON_CUTOFF))
+function _sample_poisson(::Val{true}, ::Type{T}, λ) where {T}
+    if λ < GAUSSIAN_POISSON_CUTOFF
+        # Knuth counting algorithm
+        L = exp(-λ)
+        k = 0
+        p = one(λ)
+        for _ in 1:KNUTH_MAXITER
+            p *= rand(typeof(λ))
+            p <= L && break
+            k += 1
+        end
+        return convert(T, k)
+    end
+    return round(T, max(randn() * sqrt(λ) + λ, zero(λ)))
+end
 _sample_poisson(::Val{false}, ::Type{T}, λ) where {T} = convert(T, rand(Poisson(λ)))
 function readout!(dst::AbstractArray{T}, img::AbstractArray, pc::PhotonCount{GA}, psf_norm) where {T, GA}
     if isfinite_photons(pc)

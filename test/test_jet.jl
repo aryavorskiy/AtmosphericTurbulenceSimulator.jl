@@ -1,5 +1,4 @@
 @testset "JET Precompilation Report" begin
-    ignored_modules = [HDF5, AnyFrameModule(ProgressMeter)]
     jet_report = JET.report_package(AtmosphericTurbulenceSimulator; toplevel_logger=nothing,
         ignored_modules=[HDF5, AnyFrameModule(ProgressMeter), ChunkSplitters])
     print(jet_report)
