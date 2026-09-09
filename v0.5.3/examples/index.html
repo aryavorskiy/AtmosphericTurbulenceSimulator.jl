@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Examples · AtmosphericTurbulenceSimulator.jl</title><meta name="title" content="Examples · AtmosphericTurbulenceSimulator.jl"/><meta property="og:title" content="Examples · AtmosphericTurbulenceSimulator.jl"/><meta property="twitter:title" content="Examples · AtmosphericTurbulenceSimulator.jl"/><meta name="description" content="Documentation for AtmosphericTurbulenceSimulator.jl."/><meta property="og:description" content="Documentation for AtmosphericTurbulenceSimulator.jl."/><meta property="twitter:description" content="Documentation for AtmosphericTurbulenceSimulator.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.63.2/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script><link href="../assets/favicon-96x96.png" rel="icon" type="image/x-icon"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../"><img src="../assets/logo.svg" alt="AtmosphericTurbulenceSimulator.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../">AtmosphericTurbulenceSimulator.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Overview</a></li><li class="is-active"><a class="tocitem" href>Examples</a><ul class="internal"><li><a class="tocitem" href="#Phase-Screen-Generation"><span>Phase Screen Generation</span></a></li><li><a class="tocitem" href="#True-Sky-Models"><span>True-Sky Models</span></a></li><li><a class="tocitem" href="#Multi-wavelength-Imaging"><span>Multi-wavelength Imaging</span></a></li><li><a class="tocitem" href="#Variable-exposure-times"><span>Variable exposure times</span></a></li><li><a class="tocitem" href="#HDF5-Output"><span>HDF5 Output</span></a></li></ul></li><li><a class="tocitem" href="../api/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/aryavorskiy/AtmosphericTurbulenceSimulator.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/aryavorskiy/AtmosphericTurbulenceSimulator.jl/blob/master/docs/src/examples.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Examples"><a class="docs-heading-anchor" href="#Examples">Examples</a><a id="Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Examples" title="Permalink"></a></h1><p>This page collects runnable examples for common simulation workflows. The examples use small grids and short sequences so they can run quickly in documentation builds; increase <code>n</code>, grid size, or batch size for production runs.</p><h2 id="Phase-Screen-Generation"><a class="docs-heading-anchor" href="#Phase-Screen-Generation">Phase Screen Generation</a><a id="Phase-Screen-Generation-1"></a><a class="docs-heading-anchor-permalink" href="#Phase-Screen-Generation" title="Permalink"></a></h2><p>Create a <a href="../api/#AtmosphericTurbulenceSimulator.SingleLayer"><code>SingleLayer</code></a> atmosphere by specifying the Fried parameter <span>$r_0$</span>. Use  <a href="../api/#AtmosphericTurbulenceSimulator.simulate_phases"><code>simulate_phases</code></a> to generate phase screens with the selected model; you will need to specify  the grid size and the physical scale of the aperture.</p><p>For a 2 m window represented on a 64-pixel pupil grid with <span>$r_0 = 0.2$</span> m:</p><pre><code class="language-julia hljs">using AtmosphericTurbulenceSimulator
+
+atm = SingleLayer(0.2; interpolate=:auto)   # r0 = 0.2 m
+phases = simulate_phases(atm, (64, 64), 2; n=512)   # d = 2 m aperture</code></pre><p>A useful sanity check is the phase <strong>structure function</strong> <span>$D(r) = \langle |\phi(\mathbf{x} + \mathbf{r}) - \phi(\mathbf{x})|^2 \rangle$</span>, which for Kolmogorov turbulence follows <span>$D(r) = 6.88\,(r / r_0)^{5/3}$</span>. We estimate it empirically by averaging the squared phase difference over all positions and frames for a range of pixel separations along one axis, then compare against the theoretical law:</p><pre><code class="language-julia hljs">using CairoMakie, Statistics
+
+r0_px = 0.2 / (2 / 64)                       # r0 in pixels
+seps = 1:20                                  # pixel separations to probe
+emp = @views [mean(abs2, phases[s+1:end, :, :] .- phases[1:end-s, :, :]) for s in seps]
+theory = 6.88 .* (seps ./ r0_px) .^ (5 / 3)
+
+fig = Figure(size=(800, 400))
+
+ax1 = Axis(fig[1, 1]; aspect=1, title=&quot;Example Phase Screen&quot;)
+heatmap!(ax1, phases[:, :, 1]; colormap=:viridis)
+hidedecorations!(ax1)
+
+ax2 = Axis(fig[1, 2];
+    title=&quot;Structure Function&quot;,
+    xlabel=&quot;separation r (pixels)&quot;,
+    ylabel=&quot;D(r)&quot;,
+    xscale=log10,
+    yscale=log10,
+    xticks=[1, 2, 5, 10, 20],
+    xminorticks=1:10,
+    xminorticksvisible=true,
+)
+scatter!(ax2, seps, emp; label=&quot;empirical&quot;)
+lines!(ax2, seps, theory; label=L&quot;6.88\,(r/r_0)^{5/3}&quot;, linewidth=2, color=Cycled(2))
+axislegend(ax2; position=:lt)
+
+fig</code></pre><img src="77d0ed27.png" alt="Example block output"/><p>To write phase screens to HDF5, pass a file name or <a href="../api/#AtmosphericTurbulenceSimulator.HDF5File"><code>HDF5File</code></a>:</p><pre><code class="language-julia hljs">simulate_phases(atm, (64, 64); n=3000, file=&quot;phases.h5&quot;)</code></pre><h2 id="True-Sky-Models"><a class="docs-heading-anchor" href="#True-Sky-Models">True-Sky Models</a><a id="True-Sky-Models-1"></a><a class="docs-heading-anchor-permalink" href="#True-Sky-Models" title="Permalink"></a></h2><p>An imaging simulation needs an aperture, photon budget, atmosphere, and true-sky model. The package ships three true-sky models:</p><ul><li>A <strong>point source</strong> — the default when no sky is passed to <a href="../api/#AtmosphericTurbulenceSimulator.simulate_images-Union{Tuple{T}, Tuple{Type{T}, AtmosphericTurbulenceSimulator.TrueSky, AtmosphericTurbulenceSimulator.AtmosphereSpec, ImagingSpec}} where T"><code>simulate_images</code></a>. The result is the atmospheric PSF itself.</li><li><a href="../api/#AtmosphericTurbulenceSimulator.DoubleSystem"><code>DoubleSystem</code></a> — a primary plus a secondary source. The relative position is given in image pixels and the intensity is relative to the primary.</li><li><a href="../api/#AtmosphericTurbulenceSimulator.TrueSkyImage"><code>TrueSkyImage</code></a> — an arbitrary extended brightness distribution. The input image must match the final imaging grid size, not the aperture size.</li></ul><pre><code class="language-julia hljs">using AtmosphericTurbulenceSimulator
+using CairoMakie, Statistics
+
+aperture = CircularAperture((64, 64))
+img_spec = ImagingSpec(aperture, 2, PhotonCount(1e7, 200); filter=FilterSpec(550, bandwidth=40))
+atm = SingleLayer(0.2; interpolate=:auto)
+
+point_imgs = simulate_images(atm, img_spec; n=128).images
+
+double_sky = DoubleSystem((35, 15), 0.3)
+double_imgs = simulate_images(double_sky, atm, img_spec; n=128).images
+
+sky_img = zeros(Float32, 128, 128)   # matches the 128×128 imaging grid
+sky_img[65, 65] = 1
+sky_img[50, 83] = 0.30
+sky_img[78, 42] = 0.42
+sky_img[91, 88] = 0.18
+extended_sky = TrueSkyImage(sky_img)
+extended_imgs = simulate_images(extended_sky, atm, img_spec; n=128).images</code></pre><p>The figure below shows a single frame (top row) and the average over all frames (bottom row) for each true-sky model. The point source recovers the long-exposure PSF, while the extended sources are each convolved with that same PSF:</p><pre><code class="language-julia hljs">img_avg(imgs) = dropdims(mean(imgs, dims=3), dims=3)
+heatmap_kws(title) = (; colormap=:jet, axis=(; aspect=DataAspect(), title=title,
+    xticks=Int[], yticks=Int[]))
+
+fig = Figure(size=(1200, 800))
+for (col, (imgs, label)) in enumerate(zip(
+        (point_imgs, double_imgs, extended_imgs),
+        (&quot;Point&quot;, &quot;Binary&quot;, &quot;Extended&quot;),
+    ))
+    heatmap(fig[1, col], imgs[:, :, 1]; heatmap_kws(&quot;$label — single&quot;)...)
+    heatmap(fig[2, col], img_avg(imgs); heatmap_kws(&quot;$label — average&quot;)...)
+end
+fig</code></pre><img src="f34c3932.png" alt="Example block output"/><h2 id="Multi-wavelength-Imaging"><a class="docs-heading-anchor" href="#Multi-wavelength-Imaging">Multi-wavelength Imaging</a><a id="Multi-wavelength-Imaging-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-wavelength-Imaging" title="Permalink"></a></h2><p>Atmospheric phase screens are wavelength-dependent: the same wavefront distortion produces a phase shift <span>$\phi \propto 1/\lambda$</span>, so turbulence is stronger (in radians) at shorter wavelengths. In the same way, <span>$r_0$</span> is wavelength-dependent, scaling as <span>$r_0 \propto \lambda^{6/5}$</span>. The simulation accounts for this automatically by fixing the <code>base_wavelength</code> for <span>$r_0$</span> in the atmosphere spec and then scaling the turbulence strength according to the wavelengths in <a href="../api/#AtmosphericTurbulenceSimulator.FilterSpec"><code>FilterSpec</code></a>.</p><p>To image the <strong>same physical wavefront</strong> in two bands you must use <a href="../api/#AtmosphericTurbulenceSimulator.SavedPhases"><code>SavedPhases</code></a> — the phases are generated once at the reference wavelength and then replayed with a different filter. Running two independent <a href="../api/#AtmosphericTurbulenceSimulator.SingleLayer"><code>SingleLayer</code></a> simulations would draw uncorrelated phase screens and lose the physical relationship between the bands.</p><pre><code class="language-julia hljs">using AtmosphericTurbulenceSimulator
+using CairoMakie, Statistics
+
+aperture = CircularAperture((64, 64), 30)
+atm = SingleLayer(0.2m; interpolate=:auto)
+
+# Two narrow-band filters centred at 550 nm and 820 nm
+filter_vis = FilterSpec(550nm; bandwidth=40nm)
+filter_nir = FilterSpec(820nm; bandwidth=40nm)
+
+img_spec_vis = ImagingSpec(aperture, 2m, PhotonCount(1e7, 200); filter=filter_vis)
+img_spec_nir = ImagingSpec(aperture, 2m, PhotonCount(1e7, 200); filter=filter_nir)
+
+phases, imgs_vis = simulate_images(atm, img_spec_vis; n=128)
+imgs_nir = simulate_images(SavedPhases(phases), img_spec_nir; n=128).images</code></pre><p>The NIR PSF is slightly narrower (the seeing scales as <span>$\lambda / r_0 \propto \lambda^{-1/5}$</span>), but the speckles themselves are much bigger, because their size scales as <span>$\lambda / D$</span>. The simulation handles the wavelength scaling automatically.</p><pre><code class="language-julia hljs">img_avg(imgs) = dropdims(mean(imgs, dims=3), dims=3)
+
+heatmap_kws(title) = (; colormap=:jet,
+    axis=(; aspect=DataAspect(), title=title, xticks=Int[], yticks=Int[]))
+
+fig = Figure(size=(800, 800))
+heatmap(fig[1, 1], imgs_vis[:, :, 1]; heatmap_kws(&quot;550 nm — single&quot;)...)
+heatmap(fig[1, 2], imgs_nir[:, :, 1]; heatmap_kws(&quot;820 nm — single&quot;)...)
+heatmap(fig[2, 1], img_avg(imgs_vis); heatmap_kws(&quot;550 nm — average&quot;)...)
+heatmap(fig[2, 2], img_avg(imgs_nir); heatmap_kws(&quot;820 nm — average&quot;)...)
+fig</code></pre><img src="b1a440c4.png" alt="Example block output"/><div class="admonition is-info" id="Note-f709d680e05c1c87"><header class="admonition-header">Note<a class="admonition-anchor" href="#Note-f709d680e05c1c87" title="Permalink"></a></header><div class="admonition-body"><p>The angular resolution of the final images is determined by <span>$\delta \theta = \frac{\lambda_{base}}{2\alpha D}$</span>, where <span>$\alpha$</span> is the Nyquist oversampling factor (default 1, see <a href="../api/#AtmosphericTurbulenceSimulator.ImagingSpec"><code>ImagingSpec</code></a> manual for details).</p></div></div><h2 id="Variable-exposure-times"><a class="docs-heading-anchor" href="#Variable-exposure-times">Variable exposure times</a><a id="Variable-exposure-times-1"></a><a class="docs-heading-anchor-permalink" href="#Variable-exposure-times" title="Permalink"></a></h2><p>To simulate long exposures you need non-zero wind velocity on the atmosphere spec and non-zero exposure time on the <a href="../api/#AtmosphericTurbulenceSimulator.ImagingSpec"><code>ImagingSpec</code></a>. Wind velocity is expressed in the same physical units as <span>$r_0$</span> and <code>grid_step</code> per unit time.</p><p>In this example we combine a variable exposure with the <a href="../api/#AtmosphericTurbulenceSimulator.SavedPhases"><code>SavedPhases</code></a> atmosphere spec, which replays a sequence of phase screens from an array. First, generate a large phase screen with padding so that the wind shift fits inside it:</p><pre><code class="language-julia hljs">using AtmosphericTurbulenceSimulator, CairoMakie
+# r0 = 0.2 m, aperture d = 2 m represented on 64 pixels → r0 in same units as d
+atm = SingleLayer(0.2m, interpolate=:auto)
+phases = simulate_phases(atm, (128, 128); n=1, grid_step=2m/64)</code></pre><p>Then run several simulations with increasing exposure time using the same saved phase screen. The screen is automatically cropped to the 64-pixel aperture grid and shifted by <span>$v \times t_\text{exp}$</span> in physical units, converted to pixels via <code>d</code>:</p><pre><code class="language-julia hljs">atm_saved = SavedPhases(phases; wind_velocity=(4m/s, 4m/s))   # 5.5 m/s on a 64-px/2-m grid
+ap = CircularAperture((64, 64), 31)
+img_spec_base = ImagingSpec(ap, 2m, PhotonCount(Inf))
+img_shrt = simulate_images(atm_saved, img_spec_base; n=1).images[:, :, 1]
+img_medi = simulate_images(atm_saved,                      # vt = 5.5 m/s × 0.05 s = 0.275 m shift
+    ImagingSpec(ap, 2m, PhotonCount(Inf); exposure=Exposure(0.05s, 10)); n=1).images[:, :, 1]
+img_long = simulate_images(atm_saved,                      # vt = 5.5 m/s × 0.5 s = 2.75 m shift
+    ImagingSpec(ap, 2m, PhotonCount(Inf); exposure=Exposure(0.5s, 10)); n=1).images[:, :, 1]
+
+heatmap_kws(title) = (;colormap=:jet, colorrange=(0, maximum(img_shrt)),
+    axis=(;aspect=DataAspect(), title=title, xticks=Int[], yticks=Int[]))
+fig = Figure(size=(800, 800))
+heatmap(fig[1, 1], phases[:, :, 1]; heatmap_kws(&quot;Phase screen&quot;)...,
+    colormap=:viridis, colorrange=Makie.automatic)
+heatmap(fig[1, 2], img_shrt; heatmap_kws(&quot;Instant&quot;)...)
+heatmap(fig[2, 1], img_medi; heatmap_kws(&quot;0.05 s&quot;)...)
+heatmap(fig[2, 2], img_long; heatmap_kws(&quot;0.5 s&quot;)...)
+fig</code></pre><img src="ade50fdd.png" alt="Example block output"/><h2 id="HDF5-Output"><a class="docs-heading-anchor" href="#HDF5-Output">HDF5 Output</a><a id="HDF5-Output-1"></a><a class="docs-heading-anchor-permalink" href="#HDF5-Output" title="Permalink"></a></h2><p>For large runs, write directly to HDF5 instead of holding all frames in memory:</p><pre><code class="language-julia hljs">using AtmosphericTurbulenceSimulator
+using HDF5
+
+aperture = CircularAperture((64, 64), 30)
+img_spec = ImagingSpec(aperture, 2, PhotonCount(1e7, 200))
+atm1 = SingleLayer(0.1; interpolate=:auto)
+atm2 = SingleLayer(0.4; interpolate=:auto)
+
+simulate_images(atm1, img_spec; n=16, file=HDF5File(&quot;images.h5&quot;, &quot;bad_seeing&quot;))
+simulate_images(atm2, img_spec; n=16, file=HDF5File(&quot;images.h5&quot;, &quot;good_seeing&quot;))
+
+h5open(&quot;images.h5&quot;, &quot;r&quot;) do h5  # display the file structure
+    show(stdout, &quot;text/plain&quot;, h5)
+end</code></pre><pre class="documenter-example-output"><code class="nohighlight hljs ansi">🗂️ HDF5.File: (read-only) images.h5
+├─ 📂 bad_seeing
+│  ├─ 🔢 images
+│  └─ 🔢 phases
+└─ 📂 good_seeing
+   ├─ 🔢 images
+   └─ 🔢 phases</code></pre><p>We wrote two simulation runs to the same file under different groups. Each group contains two datasets:</p><ul><li><code>&quot;images&quot;</code>: simulated images with shape <code>(Nx, Ny, n)</code>.</li><li><code>&quot;phases&quot;</code>: phase screens with shape <code>(Px, Py, n)</code>, when <code>savephases=true</code>.</li></ul><p>Set <code>savephases=false</code> to reduce disk use when only images are needed.</p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Overview</a><a class="docs-footer-nextpage" href="../api/">API Reference »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Wednesday 9 September 2026 01:02">Wednesday 9 September 2026</span>. Using Julia version 1.12.7.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
