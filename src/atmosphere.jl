@@ -19,12 +19,12 @@ Compute the phase covariance matrix of a turbulent layer in the atmosphere, foll
 term is excluded in this model.
 
 # Arguments
-- `T`: number type for the covariance matrix (default matches `r₀` if provided, otherwise `Float64`).
+- `T`: number type for the covariance matrix (default matches `r₀` if provided, otherwise `eltype(W)` or `Float64`).
 - `W`: the aperture function as a 2D array of weights. Normalized to `sum(W) == 1` internally.
 - `size`: a tuple `(nx, ny)` specifying the size of the aperture function.
 - `r₀`: Fried parameter (``r_0``) in pixel units (default `1.0`).
 """
-function kolmogorov_covmat(W::AbstractMatrix, r₀::Number=1.0)
+function kolmogorov_covmat(W::AbstractMatrix, r₀::Number=one(eltype(W)))
     I = eachindex(IndexCartesian(), W)
     C = similar(W, float(typeof(r₀)), length(I), length(I))
     for i in 1:length(I), j in 1:length(I)
@@ -32,12 +32,12 @@ function kolmogorov_covmat(W::AbstractMatrix, r₀::Number=1.0)
         y = I[i][2] - I[j][2]
         C[i, j] = -0.5 * 6.88 * ((x^2 + y^2) / r₀^2)^(5/6)
     end
-    Wp = W ./ sum(W)
+    Wp = oftype.(float(r₀), W ./ sum(W))
     Cp = vec(sum(C .* vec(Wp)', dims=2))
     Cc = sum(Cp .* vec(Wp))
     return C .- (Cp .+ Cp') .+ Cc
 end
-kolmogorov_covmat(::Type{T}, sz::NTuple{2,Int}, r₀::Number=1.0) where T = kolmogorov_covmat(ones(sz), r₀)
+kolmogorov_covmat(::Type{T}, sz::NTuple{2,Int}, r₀::Number=1.0) where T = kolmogorov_covmat(ones(sz), convert(T, r₀))
 kolmogorov_covmat(sz::NTuple{2,Int}, r₀::Number=1.0) = kolmogorov_covmat(typeof(r₀), sz, r₀)
 
 const EigenType = Union{Tuple{<:Any,<:Any}, Eigen}

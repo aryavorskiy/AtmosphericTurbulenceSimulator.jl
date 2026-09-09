@@ -10,7 +10,7 @@ function AtmosphericTurbulenceSimulator.speckle_viewer(::Type{T}=Float64;
         wavelength_range = (550:10:750)nm,
         bw_range = (0:10:100)nm,
         exptime_range = (0:0.1:3)s,
-        r0_range = (10:5:30)cm,
+        r0_range = (10:2:30)cm,
         wind_range = (0:5:100)cm/s,
         aperture = CircularAperture((64, 64)),
         d = 2m,
@@ -35,8 +35,8 @@ function AtmosphericTurbulenceSimulator.speckle_viewer(::Type{T}=Float64;
         (label="Exposure", range=exptime_range, startvalue=first(exptime_range)))
     wl_s, bw_s, exp_s = (s.value for s in img_sg.sliders)
 
-    phase_screen = lift(r0_s, newphase_btn.clicks) do r0, _
-        atm = SingleLayer(T, r0; interpolate=:auto)
+    phase_screen = lift(newphase_btn.clicks) do _
+        atm = SingleLayer(T, first(r0_range); interpolate=:auto)
         pad = NoUnits(maximum(wind_range) / d * maximum(exptime_range))
         simulate_phases(atm, ceil.(Int, size(aperture) .* (1 + pad, 1));
             n=1, verbose=false, grid_step=d / size(aperture, 2), deviceadapter=deviceadapter)
@@ -54,7 +54,11 @@ function AtmosphericTurbulenceSimulator.speckle_viewer(::Type{T}=Float64;
         phase_screen[] = phs_tot .- cx .* (axes(phs_tot, 1) .- ox) .- cy .* (axes(phs_tot, 2) .- oy)'
     end
 
-    speckle_pattern = lift(wind_s, wl_s, bw_s, exp_s, phase_screen) do wind, wl, bw, exptime, phs
+    phase_screen_scaled = lift(phase_screen, r0_s) do phs_tot, r0
+        phs_tot * (first(r0_range) / r0)^(5/6)
+    end
+
+    speckle_pattern = lift(wind_s, wl_s, bw_s, exp_s, phase_screen_scaled) do wind, wl, bw, exptime, phs
         atm = SavedPhases(phs, wind_velocity=(wind, zero(wind)))
         img_spec = ImagingSpec(T, aperture, d, PhotonCount(Inf);
             filter=FilterSpec(wl; bandwidth=bw, npts=iszero(bw) ? 0 : ceil(Int, NoUnits(bw / wl) * 20 + 3)),
@@ -68,7 +72,7 @@ function AtmosphericTurbulenceSimulator.speckle_viewer(::Type{T}=Float64;
     ap_step = d / maximum(size(aperture))
     ap_x, ap_y = ustrip.(axes(aperture) .* ap_step)
 
-    phase_screen_2d = lift(phs -> phs[axes(aperture)..., 1], phase_screen)
+    phase_screen_2d = lift(phs -> phs[axes(aperture)..., 1], phase_screen_scaled)
     ax_p, hm_p = heatmap(fig[3, 2], ap_x, ap_y, phase_screen_2d, colormap=:viridis,
         axis=(; xlabel=string(unit(d)), axis_kw...))
     contour!(ax_p, ap_x, ap_y, aperture, levels=[0.5], color=:white, linewidth=2)
@@ -81,7 +85,7 @@ function AtmosphericTurbulenceSimulator.speckle_viewer(::Type{T}=Float64;
     hidedecorations!(ax_i)
 
     Label(fig[4, :], """
-    Hint: drag to zoom, left-click to pan, ctrl+click to reset view.
+    Hint: drag or scroll to zoom, left-click to pan, ctrl+click to reset view.
     """, fontsize=12)
     fig
 end
